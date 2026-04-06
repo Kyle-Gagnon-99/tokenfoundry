@@ -1,0 +1,3 @@
+[workspace]
+resolver = "3"
+members = ["token_shift_cli", "token_shift_core"]

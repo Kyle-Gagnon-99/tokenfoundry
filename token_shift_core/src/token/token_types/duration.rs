@@ -1,0 +1,240 @@
+//! The `duration` module defines the data structures for duration tokens defined in the DTCG specification,
+//! which represents a duration in the UI, such as the duration of an animation or transition.
+
+use crate::{
+    errors::DiagnosticCode,
+    token::{
+        ParseState, TryFromJson,
+        utils::{
+            JsonFloatOrInteger, require_enum_string_with_mapping, require_float_or_integer,
+            require_object_field,
+        },
+    },
+};
+
+/// The DTCG specification only accepts the "value" property for duration tokens, which is a string,
+/// to be either "ms" for milliseconds or "s" for seconds. This enum represents the unit of the duration token value.
+pub enum DurationUnit {
+    Ms,
+    S,
+}
+
+/// Represents a duration token value, which consists of a numeric value and a unit
+pub struct DurationTokenValue {
+    /// The numeric value of the duration, which can be either a signed integer or a float
+    pub value: f64,
+    /// The unit of the duration, which can be either milliseconds (ms) or seconds (s)
+    pub unit: DurationUnit,
+}
+
+impl<'a> TryFromJson<'a> for DurationTokenValue {
+    fn try_from_json(
+        ctx: &mut crate::ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> ParseState<Self> {
+        match value {
+            serde_json::Value::Object(map) => {
+                // The DTCG specification defines that a duration token value shall have "value" property which is a number
+                // and a "unit" property, which is a string that can be either "ms" or "s"
+                let raw_value = require_object_field(ctx, path, map, "value");
+                let raw_unit = require_object_field(ctx, path, map, "unit");
+
+                let parsed_value = raw_value.and_then(|raw| {
+                    require_float_or_integer(ctx, path, raw).map(|number| match number {
+                        JsonFloatOrInteger::Float(parsed_float) => parsed_float,
+                        JsonFloatOrInteger::Integer(parsed_int) => parsed_int as f64,
+                    })
+                });
+
+                let parsed_unit = raw_unit.and_then(|raw| {
+                    require_enum_string_with_mapping(
+                        ctx,
+                        path,
+                        "unit",
+                        raw,
+                        |s| match s {
+                            "ms" => Some(DurationUnit::Ms),
+                            "s" => Some(DurationUnit::S),
+                            _ => None,
+                        },
+                        "ms, s",
+                    )
+                });
+
+                match (parsed_value, parsed_unit) {
+                    (Some(value), Some(unit)) => ParseState::Parsed(Self { value, unit }),
+                    _ => ParseState::Skipped,
+                }
+            }
+            _ => {
+                ctx.push_to_errors(
+                    DiagnosticCode::InvalidPropertyType,
+                    format!("The duration token value should be an object with 'value' and 'unit' properties, but found {}", value),
+                    path.into(),
+                );
+                ParseState::Skipped
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{FileFormat, ParserContext, errors::DiagnosticCode};
+    use serde_json::json;
+
+    fn make_context() -> ParserContext {
+        ParserContext::new(String::from("test.json"), FileFormat::Json, String::new())
+    }
+
+    fn parse_duration(
+        value: &serde_json::Value,
+    ) -> (ParseState<DurationTokenValue>, ParserContext) {
+        let mut ctx = make_context();
+        let result =
+            DurationTokenValue::try_from_json(&mut ctx, "tokens.motion.fast.duration", value);
+        (result, ctx)
+    }
+
+    #[test]
+    fn parses_integer_duration_with_ms_unit() {
+        let value = json!({
+            "value": 150,
+            "unit": "ms"
+        });
+
+        let (result, ctx) = parse_duration(&value);
+
+        assert!(ctx.errors.is_empty());
+
+        let ParseState::Parsed(parsed) = result else {
+            panic!("expected duration token to parse successfully");
+        };
+
+        assert_eq!(parsed.value, 150.0);
+        assert!(matches!(parsed.unit, DurationUnit::Ms));
+    }
+
+    #[test]
+    fn parses_float_duration_with_seconds_unit() {
+        let value = json!({
+            "value": 0.25,
+            "unit": "s"
+        });
+
+        let (result, ctx) = parse_duration(&value);
+
+        assert!(ctx.errors.is_empty());
+
+        let ParseState::Parsed(parsed) = result else {
+            panic!("expected duration token to parse successfully");
+        };
+
+        assert_eq!(parsed.value, 0.25);
+        assert!(matches!(parsed.unit, DurationUnit::S));
+    }
+
+    #[test]
+    fn parses_negative_duration_value() {
+        let value = json!({
+            "value": -50,
+            "unit": "ms"
+        });
+
+        let (result, ctx) = parse_duration(&value);
+
+        assert!(ctx.errors.is_empty());
+
+        let ParseState::Parsed(parsed) = result else {
+            panic!("expected duration token to parse successfully");
+        };
+
+        assert_eq!(parsed.value, -50.0);
+        assert!(matches!(parsed.unit, DurationUnit::Ms));
+    }
+
+    #[test]
+    fn skips_when_required_unit_is_missing() {
+        let value = json!({
+            "value": 100
+        });
+
+        let (result, ctx) = parse_duration(&value);
+
+        assert!(matches!(result, ParseState::Skipped));
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::MissingRequiredProperty);
+        assert_eq!(ctx.errors[0].message, "Missing required field: unit");
+        assert_eq!(ctx.errors[0].path, "tokens.motion.fast.duration");
+    }
+
+    #[test]
+    fn skips_when_both_required_fields_are_missing() {
+        let value = json!({});
+
+        let (result, ctx) = parse_duration(&value);
+
+        assert!(matches!(result, ParseState::Skipped));
+        assert_eq!(ctx.errors.len(), 2);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::MissingRequiredProperty);
+        assert_eq!(ctx.errors[0].message, "Missing required field: value");
+        assert_eq!(ctx.errors[1].code, DiagnosticCode::MissingRequiredProperty);
+        assert_eq!(ctx.errors[1].message, "Missing required field: unit");
+    }
+
+    #[test]
+    fn skips_when_value_and_unit_are_invalid() {
+        let value = json!({
+            "value": "100",
+            "unit": "minutes"
+        });
+
+        let (result, ctx) = parse_duration(&value);
+
+        assert!(matches!(result, ParseState::Skipped));
+        assert_eq!(ctx.errors.len(), 2);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
+        assert_eq!(
+            ctx.errors[0].message,
+            "Expected a number, but found: \"100\""
+        );
+        assert_eq!(ctx.errors[1].code, DiagnosticCode::InvalidEnumValue);
+        assert_eq!(
+            ctx.errors[1].message,
+            "Expected one of ms, s for the field 'unit', but got 'minutes'"
+        );
+    }
+
+    #[test]
+    fn skips_when_unit_has_wrong_json_type() {
+        let value = json!({
+            "value": 100,
+            "unit": true
+        });
+
+        let (result, ctx) = parse_duration(&value);
+
+        assert!(matches!(result, ParseState::Skipped));
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
+        assert_eq!(ctx.errors[0].message, "Expected a string, but found: true");
+    }
+
+    #[test]
+    fn skips_when_value_is_not_an_object() {
+        let value = json!("150ms");
+
+        let (result, ctx) = parse_duration(&value);
+
+        assert!(matches!(result, ParseState::Skipped));
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
+        assert_eq!(
+            ctx.errors[0].message,
+            "The duration token value should be an object with 'value' and 'unit' properties, but found \"150ms\""
+        );
+        assert_eq!(ctx.errors[0].path, "tokens.motion.fast.duration");
+    }
+}
