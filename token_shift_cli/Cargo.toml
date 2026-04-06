@@ -1,7 +1,0 @@
-[package]
-name = "token_shift_cli"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-token_shift_core = { path = "../token_shift_core" }

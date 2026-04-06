@@ -1,5 +1,6 @@
 [package]
-name = "token_shift_core"
+name = "core"
+description = "Core library for "
 version = "0.1.0"
 edition = "2024"
 
