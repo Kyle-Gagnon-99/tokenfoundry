@@ -4,8 +4,8 @@ use crate::{
     ParserContext,
     errors::DiagnosticCode,
     token::{
-        DeprecationValue, TryFromJson,
-        ir::{JsonPointer, JsonRef, JsonRefKind, RefOr},
+        DeprecationValue, ParseState, TryFromJson,
+        ir::{JsonPointer, JsonRef, RefOr},
     },
 };
 
@@ -326,16 +326,13 @@ pub fn require_float_or_integer<'a>(
     }
 }
 
-pub fn parse_ref_or_type<'a, T>(
+pub fn parse_ref_or_literal<'a, T>(
     ctx: &mut ParserContext,
     path: &'a str,
     value: &'a serde_json::Value,
-    parse: impl FnOnce(&mut ParserContext, &str, &'a serde_json::Value) -> Option<T>,
-) -> Option<RefOr<T>>
-where
-    T: TryFromJson<'a>,
-{
-    /* match value {
+    parse: impl FnOnce(&mut ParserContext, &str, &'a serde_json::Value) -> ParseState<T>,
+) -> ParseState<RefOr<T>> {
+    match value {
         serde_json::Value::Object(map) => {
             // Check to see if the object has a $ref property and no other properties
             // We may have a $ref, but if there are other properties, this is not a valid reference
@@ -345,13 +342,50 @@ where
 
             if has_ref && map.len() == 1 {
                 // This is a reference object
-                let raw_ref = require_object_field(ctx, path, map, "$ref")?;
-                let ref_str = require_string(ctx, path, raw_ref)?;
+                let raw_ref = match require_object_field(ctx, path, map, "$ref") {
+                    Some(value) => value,
+                    None => {
+                        // The error has already been pushed by require_object_field, so we just return Skipped here
+                        return ParseState::Skipped;
+                    }
+                };
+                let ref_str = match require_string(ctx, path, raw_ref) {
+                    Some(value) => value,
+                    None => {
+                        // The error has already been pushed by require_string, so we just return Skipped here
+                        return ParseState::Skipped;
+                    }
+                };
 
-
+                // Check if the reference is a valid JSON pointer
+                if JsonPointer::is_valid_local_json_pointer(ref_str) {
+                    return ParseState::Parsed(RefOr::Ref(JsonRef::new_local_pointer(
+                        ref_str.to_owned(),
+                        JsonPointer::from(ref_str),
+                    )));
+                } else {
+                    ctx.push_to_errors(
+                        DiagnosticCode::InvalidReference,
+                        format!("Invalid JSON pointer: {}", ref_str),
+                        path.into(),
+                    );
+                    return ParseState::Skipped;
+                }
+            } else {
+                // This is a regular object that should be parsed as the type T
+                let parsed_value = parse(ctx, path, value);
+                match parsed_value {
+                    ParseState::Parsed(inner) => ParseState::Parsed(RefOr::Literal(inner)),
+                    ParseState::Skipped => ParseState::Skipped,
+                }
             }
         }
-        _ => parse(ctx, path, value),
-    } */
-    Some(RefOr::Literal(parse(ctx, path, value)?))
+        _ => {
+            let parsed_value = parse(ctx, path, value);
+            match parsed_value {
+                ParseState::Parsed(inner) => ParseState::Parsed(RefOr::Literal(inner)),
+                ParseState::Skipped => ParseState::Skipped,
+            }
+        }
+    }
 }

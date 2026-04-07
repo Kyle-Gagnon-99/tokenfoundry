@@ -28,6 +28,7 @@ pub enum DiagnosticCode {
     InvalidGroupShape,
     InvalidPropertyValue,
     ResolverConflict,
+    InvalidReference,
     Other,
 }
 

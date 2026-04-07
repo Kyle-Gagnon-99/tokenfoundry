@@ -192,7 +192,7 @@ impl JsonPointer {
     ///
     /// # Arguments
     ///
-    /// * `segments` - An iterator of items that can be converted into strings, representing the segments of the pointer, ordered from the root of the JSON document to the specific value
+    /// - `segments` - An iterator of items that can be converted into strings, representing the segments of the pointer, ordered from the root of the JSON document to the specific value
     ///
     /// # Returns
     ///
@@ -219,9 +219,19 @@ impl JsonPointer {
     /// Supports both normal JSON pointers and URI fragment identifiers (which start with a '#' character followed by a JSON pointer)
     ///
     /// # Arguments
-    pub fn is_valid_json_pointer(s: &str) -> bool {
-        //
-        true
+    ///
+    /// - `s` - The string to be checked for validity as a JSON Pointer
+    ///
+    /// # Returns
+    ///
+    /// `true` if the input string is a valid JSON Pointer according to the specification, `false` otherwise.
+    pub fn is_valid_local_json_pointer(s: &str) -> bool {
+        // Create a regular expression to match valid JSON Pointers according to RFC 6901
+        // A valid JSON Pointer is either an empty string or a string that starts with a '/'
+        // followed by zero or more segments, where each segment can contain any characters except for '~' and '/'
+        // Additionally, we also want to support URI fragment identifiers, which start with a '#' character followed by a JSON Pointer
+        let re = Regex::new(r"^(#)?(/([^/~]|~0|~1)*)*$").unwrap();
+        re.is_match(s)
     }
 }
 
@@ -277,6 +287,13 @@ impl JsonRef {
     pub fn new(raw_value: String, kind: JsonRefKind) -> Self {
         Self { raw_value, kind }
     }
+
+    pub fn new_local_pointer(raw_value: String, pointer: JsonPointer) -> Self {
+        Self {
+            raw_value,
+            kind: JsonRefKind::LocalPointer { pointer },
+        }
+    }
 }
 
 /// The `RefOr` enum represents a property value that can either be a literal value of type `T` or a reference
@@ -292,7 +309,7 @@ impl<T> RefOr<T> {
     ///
     /// # Arguments
     ///
-    /// * `value` - The literal value of type `T` to be wrapped in the `RefOr` enum
+    /// - `value` - The literal value of type `T` to be wrapped in the `RefOr` enum
     ///
     /// # Returns
     ///
@@ -305,7 +322,7 @@ impl<T> RefOr<T> {
     ///
     /// # Arguments
     ///
-    /// * `json_ref` - A `JsonRef` instance representing the reference to another token or value in the IR
+    /// - `json_ref` - A `JsonRef` instance representing the reference to another token or value in the IR
     ///
     /// # Returns
     ///
