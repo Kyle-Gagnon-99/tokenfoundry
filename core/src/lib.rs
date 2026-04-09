@@ -8,6 +8,7 @@ use crate::errors::{Diagnostic, DiagnosticCode};
 
 pub mod config;
 pub mod errors;
+pub mod ir;
 pub mod parser;
 pub mod token;
 

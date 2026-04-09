@@ -1,13 +1,12 @@
 //! The `token` module provides functionality for parsing and handling design tokens.
-pub mod ir;
 pub mod token_types;
 pub mod utils;
 
-use std::collections::HashMap;
-
-pub use token_types::*;
-
-use crate::ParserContext;
+use crate::{
+    ParserContext,
+    errors::DiagnosticCode,
+    ir::{JsonPointer, JsonRef, TokenAlias, TokenValue},
+};
 
 pub enum ParseState<T> {
     Parsed(T),
@@ -23,6 +22,15 @@ impl<T> Into<Option<T>> for ParseState<T> {
     }
 }
 
+impl<T> ParseState<T> {
+    pub fn map<U>(self, f: impl Fn(T) -> U) -> ParseState<U> {
+        match self {
+            ParseState::Parsed(value) => ParseState::Parsed(f(value)),
+            ParseState::Skipped => ParseState::Skipped,
+        }
+    }
+}
+
 /// Converts tokens from the raw JSON to the given struct
 pub trait TryFromJson<'a>: Sized {
     fn try_from_json(
@@ -32,41 +40,60 @@ pub trait TryFromJson<'a>: Sized {
     ) -> ParseState<Self>;
 }
 
-/// The value of deprecation can either be a boolean or a string message. If it's a boolean, it indicates whether the token is deprecated or not.
-/// If it's a string message, it provides additional information about the deprecation, such as the reason for deprecation or the recommended alternative.
-pub enum DeprecationValue {
-    /// Indicates that the token is deprecated with an additional message providing more information about the deprecation.
-    WithMessage(String),
-    /// Indicates that the token is deprecated without providing additional information.
-    Boolean(bool),
+pub trait TryFromJsonField<'a>: Sized {
+    fn try_from_json_field(
+        ctx: &mut ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self>;
 }
 
-/// Represents a node in the token hierarchy, which can be either a token or a group of tokens.
-pub enum Node {
-    Token(Token),
-    Group(Group),
+pub fn parse_plain_token<'a, T: TryFromJson<'a>>(
+    ctx: &mut ParserContext,
+    path: &str,
+    value: &'a serde_json::Value,
+) -> ParseState<TokenValue<T>> {
+    T::try_from_json(ctx, path, value).map(TokenValue::Value)
 }
 
-/// Represents the common properties of both tokens and groups, such as name, description, extensions, and deprecation status.
-pub struct NodeCommon {
-    pub name: String,
-    pub description: Option<String>,
-    pub extensions: HashMap<String, serde_json::Value>,
-    pub deprecated: Option<DeprecationValue>,
-}
+pub fn parse_token<'a, T: TryFromJson<'a>>(
+    ctx: &mut ParserContext,
+    path: &str,
+    value: &'a serde_json::Value,
+) -> ParseState<TokenValue<T>> {
+    match value {
+        serde_json::Value::String(str_val) => {
+            if let Some(alias) = TokenAlias::from_dtcg_alias(str_val) {
+                ParseState::Parsed(TokenValue::Alias(alias))
+            } else {
+                parse_plain_token(ctx, path, value)
+            }
+        }
+        serde_json::Value::Object(map) => {
+            let raw_ref = match utils::require_object_field(ctx, path, map, "$ref") {
+                Some(value) => value,
+                None => return ParseState::Skipped,
+            };
 
-/// Represents a design token, which has a path, type, and value. The path is a unique identifier for the token,
-/// which can be used to reference it from other tokens or groups.
-pub struct Token {
-    pub common: NodeCommon,
-    pub path: String,
-    pub token_type: TokenType,
-    pub value: TokenValue,
-}
+            let ref_str = match utils::require_string(ctx, path, raw_ref) {
+                Some(value) => value,
+                None => return ParseState::Skipped,
+            };
 
-/// Represents a group of tokens, which can contain both tokens and other groups. The group has a common property that includes
-/// the name, description, extensions, and deprecation status of the group.
-pub struct Group {
-    pub common: NodeCommon,
-    pub children: HashMap<String, Node>,
+            if !JsonPointer::is_valid_local_json_pointer(ref_str) {
+                ctx.push_to_errors(
+                    DiagnosticCode::InvalidReference,
+                    format!("Invalid JSON pointer: {}", ref_str),
+                    path.into(),
+                );
+                return ParseState::Skipped;
+            }
+
+            ParseState::Parsed(TokenValue::Ref(JsonRef::new_local_pointer(
+                ref_str.to_owned(),
+                JsonPointer::from(ref_str),
+            )))
+        }
+        _ => parse_plain_token(ctx, path, value),
+    }
 }

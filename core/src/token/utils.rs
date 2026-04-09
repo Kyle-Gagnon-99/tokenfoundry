@@ -3,38 +3,48 @@
 use crate::{
     ParserContext,
     errors::DiagnosticCode,
-    token::{
-        DeprecationValue, ParseState, TryFromJson,
-        ir::{JsonPointer, JsonRef, RefOr},
-    },
+    ir::{RefOr, parse_ref_or_value},
+    token::TryFromJsonField,
 };
 
-/// The `JsonFloatOrInteger` enum represents a JSON value that can be either a float or a signed integer.
-pub enum JsonFloatOrInteger {
+/// The `FloatOrInteger` enum represents a JSON value that can be either a float or a signed integer.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FloatOrInteger {
     Integer(i64),
     Float(f64),
 }
 
-/// Parses a deprecation value from a JSON value.
-///
-/// Converts a `serde_json::Value` into a `DeprecationValue` enum variant.
-/// Supports two formats:
-/// - Boolean values are converted to `DeprecationValue::Boolean`
-/// - String values are converted to `DeprecationValue::WithMessage`
-///
-/// # Arguments
-///
-/// * `value` - A reference to a `serde_json::Value` to parse
-///
-/// # Returns
-///
-/// Returns `Some(DeprecationValue)` if the value is a boolean or string,
-/// otherwise returns `None` if the value is of an unsupported type.
-pub fn parse_deprecation_value(value: &serde_json::Value) -> Option<DeprecationValue> {
-    match value {
-        serde_json::Value::Bool(b) => Some(DeprecationValue::Boolean(*b)),
-        serde_json::Value::String(s) => Some(DeprecationValue::WithMessage(s.clone())),
-        _ => None,
+impl TryFrom<&serde_json::Number> for FloatOrInteger {
+    type Error = ();
+
+    fn try_from(value: &serde_json::Number) -> Result<Self, Self::Error> {
+        if value.is_i64() {
+            Ok(FloatOrInteger::Integer(value.as_i64().unwrap()))
+        } else if value.is_f64() {
+            Ok(FloatOrInteger::Float(value.as_f64().unwrap()))
+        } else {
+            Err(())
+        }
+    }
+}
+
+impl<'a> TryFromJsonField<'a> for FloatOrInteger {
+    fn try_from_json_field(
+        ctx: &mut ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        match value {
+            serde_json::Value::Number(num) => Self::try_from(num).ok(),
+            _ => {
+                ctx.push_to_errors(
+                    DiagnosticCode::InvalidPropertyType,
+                    format!("Expected a number, but found: {value}"),
+                    path.into(),
+                );
+                None
+            }
+        }
     }
 }
 
@@ -43,10 +53,10 @@ pub fn parse_deprecation_value(value: &serde_json::Value) -> Option<DeprecationV
 /// If the field is missing, it pushes an error to the parser context and returns `None`.
 ///
 /// # Arguments
-/// * `ctx` - The parser context to push errors to
-/// * `path` - The path to the current token, used for error reporting
-/// * `map` - The JSON object to extract the field from
-/// * `field_name` - The name of the required field to extract
+/// - `ctx` - The parser context to push errors to
+/// - `path` - The path to the current token, used for error reporting
+/// - `map` - The JSON object to extract the field from
+/// - `field_name` - The name of the required field to extract
 ///
 /// # Returns
 ///
@@ -75,10 +85,9 @@ pub fn require_object_field<'a>(
 /// If the value is not a number, it pushes an error to the parser context and returns `None`.
 ///
 /// # Arguments
-///
-/// * `ctx` - The parser context to push errors to
-/// * `path` - The path to the current token, used for error reporting
-/// * `value` - The JSON value to check if it's a number
+/// - `ctx` - The parser context to push errors to
+/// - `path` - The path to the current token, used for error reporting
+/// - `value` - The JSON value to check if it's a number
 ///
 /// # Returns
 ///
@@ -107,9 +116,9 @@ pub fn require_number<'a>(
 ///
 /// # Arguments
 ///
-/// * `ctx` - The parser context to push errors to
-/// * `path` - The path to the current token, used for error reporting
-/// * `value` - The JSON value to check if it's a string
+/// - `ctx` - The parser context to push errors to
+/// - `path` - The path to the current token, used for error reporting
+/// - `value` - The JSON value to check if it's a string
 ///
 /// # Returns
 ///
@@ -138,9 +147,9 @@ pub fn require_string<'a>(
 ///
 /// # Arguments
 ///
-/// * `ctx` - The parser context to push errors to
-/// * `path` - The path to the current token, used for error reporting
-/// * `value` - The JSON value to check if it's an array
+/// - `ctx` - The parser context to push errors to
+/// - `path` - The path to the current token, used for error reporting
+/// - `value` - The JSON value to check if it's an array
 ///
 /// # Returns
 ///
@@ -169,9 +178,9 @@ pub fn require_array<'a>(
 ///
 /// # Arguments
 ///
-/// * `ctx` - The parser context to push errors to
-/// * `path` - The path to the current token, used for error reporting
-/// * `value` - The JSON value to check if it's an object
+/// - `ctx` - The parser context to push errors to
+/// - `path` - The path to the current token, used for error reporting
+/// - `value` - The JSON value to check if it's an object
 ///
 /// # Returns
 ///
@@ -200,10 +209,10 @@ pub fn require_object<'a>(
 ///
 /// # Arguments
 ///
-/// * `ctx` - The parser context to push errors to
-/// * `path` - The path to the current token, used for error reporting
-/// * `value` - The JSON value to check if it's a string that matches one of the valid enum values
-/// * `valid_values` - A slice of valid string values that the input value should match
+/// - `ctx` - The parser context to push errors to
+/// - `path` - The path to the current token, used for error reporting
+/// - `value` - The JSON value to check if it's a string that matches one of the valid enum values
+/// - `valid_values` - A slice of valid string values that the input value should match
 ///
 /// # Returns
 ///
@@ -249,12 +258,12 @@ pub fn require_enum_string<'a>(
 ///
 /// # Arguments
 ///
-/// * `ctx` - The parser context to push errors to
-/// * `path` - The path to the current token, used for error reporting
-/// * `field_name` - The name of the field being parsed, used for error reporting
-/// * `value` - The JSON value to check if it's a string that matches one of the valid enum values
-/// * `parse` - A function that takes a string and returns an `Option<T>`, where `T` is the internal representation of the enum value. This function should return `Some(T)` if the input string matches a valid enum value, or `None` if it does not.
-/// * `expected_values` - A string representation of the expected valid values, used for error reporting in case of an invalid value. This can be a comma-separated list of valid values or any other format suitable for error messages.
+/// - `ctx` - The parser context to push errors to
+/// - `path` - The path to the current token, used for error reporting
+/// - `field_name` - The name of the field being parsed, used for error reporting
+/// - `value` - The JSON value to check if it's a string that matches one of the valid enum values
+/// - `parse` - A function that takes a string and returns an `Option<T>`, where `T` is the internal representation of the enum value. This function should return `Some(T)` if the input string matches a valid enum value, or `None` if it does not.
+/// - `expected_values` - A string representation of the expected valid values, used for error reporting in case of an invalid value. This can be a comma-separated list of valid values or any other format suitable for error messages.
 ///
 /// # Returns
 ///
@@ -288,9 +297,9 @@ pub fn require_enum_string_with_mapping<'a, T>(
 ///
 /// # Arguments
 ///
-/// * `ctx` - The parser context to push errors to
-/// * `path` - The path to the current token, used for error reporting
-/// * `value` - The JSON value to check if it's a number that can be either a float or an integer
+/// - `ctx` - The parser context to push errors to
+/// - `path` - The path to the current token, used for error reporting
+/// - `value` - The JSON value to check if it's a number that can be either a float or an integer
 ///
 /// # Returns
 ///
@@ -299,13 +308,13 @@ pub fn require_float_or_integer<'a>(
     ctx: &mut ParserContext,
     path: &'a str,
     value: &'a serde_json::Value,
-) -> Option<JsonFloatOrInteger> {
+) -> Option<FloatOrInteger> {
     match value {
         serde_json::Value::Number(n) => {
             if n.is_i64() {
-                Some(JsonFloatOrInteger::Integer(n.as_i64().unwrap()))
+                Some(FloatOrInteger::Integer(n.as_i64().unwrap()))
             } else if n.is_f64() {
-                Some(JsonFloatOrInteger::Float(n.as_f64().unwrap()))
+                Some(FloatOrInteger::Float(n.as_f64().unwrap()))
             } else {
                 ctx.push_to_errors(
                     DiagnosticCode::InvalidPropertyType,
@@ -326,66 +335,263 @@ pub fn require_float_or_integer<'a>(
     }
 }
 
-pub fn parse_ref_or_literal<'a, T>(
+pub enum FieldPresence {
+    Required,
+    Optional,
+}
+
+pub fn parse_field<'a, T: TryFromJsonField<'a>>(
     ctx: &mut ParserContext,
-    path: &'a str,
-    value: &'a serde_json::Value,
-    parse: impl FnOnce(&mut ParserContext, &str, &'a serde_json::Value) -> ParseState<T>,
-) -> ParseState<RefOr<T>> {
-    match value {
-        serde_json::Value::Object(map) => {
-            // Check to see if the object has a $ref property and no other properties
-            // We may have a $ref, but if there are other properties, this is not a valid reference
-            // The specification does not explicitly state that a reference object cannot have other properties, but we
-            // will consider it invalid to avoid ambiguity and potential errors in parsing.
-            let has_ref = map.contains_key("$ref");
+    path: &str,
+    value: &'a serde_json::Map<String, serde_json::Value>,
+    field_name: &str,
+    presence: FieldPresence,
+) -> Option<RefOr<T>> {
+    // First, get if the field is present
+    let raw_value_opt = value.get(field_name);
 
-            if has_ref && map.len() == 1 {
-                // This is a reference object
-                let raw_ref = match require_object_field(ctx, path, map, "$ref") {
-                    Some(value) => value,
-                    None => {
-                        // The error has already been pushed by require_object_field, so we just return Skipped here
-                        return ParseState::Skipped;
-                    }
-                };
-                let ref_str = match require_string(ctx, path, raw_ref) {
-                    Some(value) => value,
-                    None => {
-                        // The error has already been pushed by require_string, so we just return Skipped here
-                        return ParseState::Skipped;
-                    }
-                };
+    // If the field is required but not present, push an error and return None
+    // Otherwise, if the field is optional and not present, we can just return None without an error
+    let raw_value = match (raw_value_opt, presence) {
+        (Some(raw), _) => raw,
+        (None, FieldPresence::Required) => {
+            ctx.push_to_errors(
+                DiagnosticCode::MissingRequiredProperty,
+                format!("Missing required field: {}", field_name),
+                path.into(),
+            );
+            return None;
+        }
+        (None, FieldPresence::Optional) => return None,
+    };
 
-                // Check if the reference is a valid JSON pointer
-                if JsonPointer::is_valid_local_json_pointer(ref_str) {
-                    return ParseState::Parsed(RefOr::Ref(JsonRef::new_local_pointer(
-                        ref_str.to_owned(),
-                        JsonPointer::from(ref_str),
-                    )));
-                } else {
-                    ctx.push_to_errors(
-                        DiagnosticCode::InvalidReference,
-                        format!("Invalid JSON pointer: {}", ref_str),
-                        path.into(),
-                    );
-                    return ParseState::Skipped;
-                }
-            } else {
-                // This is a regular object that should be parsed as the type T
-                let parsed_value = parse(ctx, path, value);
-                match parsed_value {
-                    ParseState::Parsed(inner) => ParseState::Parsed(RefOr::Literal(inner)),
-                    ParseState::Skipped => ParseState::Skipped,
-                }
-            }
+    parse_ref_or_value(ctx, path, raw_value)
+}
+
+pub fn parse_field_no_ref<'a, T: TryFromJsonField<'a>>(
+    ctx: &mut ParserContext,
+    path: &str,
+    value: &'a serde_json::Map<String, serde_json::Value>,
+    field_name: &str,
+    presence: FieldPresence,
+) -> Option<T> {
+    // First, get if the field is present
+    let raw_value_opt = value.get(field_name);
+
+    // If the field is required but not present, push an error and return None
+    // Otherwise, if the field is optional and not present, we can just return None without an error
+    let raw_value = match (raw_value_opt, presence) {
+        (Some(raw), _) => raw,
+        (None, FieldPresence::Required) => {
+            ctx.push_to_errors(
+                DiagnosticCode::MissingRequiredProperty,
+                format!("Missing required field: {}", field_name),
+                path.into(),
+            );
+            return None;
         }
-        _ => {
-            let parsed_value = parse(ctx, path, value);
-            match parsed_value {
-                ParseState::Parsed(inner) => ParseState::Parsed(RefOr::Literal(inner)),
-                ParseState::Skipped => ParseState::Skipped,
-            }
+        (None, FieldPresence::Optional) => return None,
+    };
+
+    T::try_from_json_field(ctx, path, raw_value)
+}
+
+//-----------------------------------------
+// Implement TryFromJsonField for common types like String, JsonFloatOrInteger, etc. to allow them to be used with parse_field
+//-----------------------------------------
+
+impl<'a> TryFromJsonField<'a> for String {
+    fn try_from_json_field(
+        ctx: &mut ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        require_string(ctx, path, value).map(|s| s.to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        FileFormat, ParserContext,
+        errors::DiagnosticCode,
+        ir::{JsonPointer, JsonRef, RefOr},
+        token::TryFromJsonField,
+    };
+    use serde_json::json;
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct TestField {
+        value: String,
+    }
+
+    impl<'a> TryFromJsonField<'a> for TestField {
+        fn try_from_json_field(
+            ctx: &mut ParserContext,
+            path: &str,
+            value: &'a serde_json::Value,
+        ) -> Option<Self> {
+            let object = require_object(ctx, path, value)?;
+            let raw_value = require_object_field(ctx, path, object, "value")?;
+            let value = require_string(ctx, path, raw_value)?;
+
+            Some(Self {
+                value: value.to_owned(),
+            })
         }
+    }
+
+    fn make_context() -> ParserContext {
+        ParserContext::new(String::from("test.json"), FileFormat::Json, String::new())
+    }
+
+    fn parse_test_field(
+        container: &serde_json::Value,
+        field_name: &str,
+        presence: FieldPresence,
+    ) -> (Option<RefOr<TestField>>, ParserContext) {
+        let mut ctx = make_context();
+        let path = "tokens.motion.fast";
+        let map = container.as_object().expect("expected container object");
+        let result = parse_field::<TestField>(&mut ctx, path, map, field_name, presence);
+        (result, ctx)
+    }
+
+    #[test]
+    fn returns_none_without_error_for_missing_optional_field() {
+        let container = json!({});
+
+        let (result, ctx) = parse_test_field(&container, "value", FieldPresence::Optional);
+
+        assert!(result.is_none());
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn returns_none_with_error_for_missing_required_field() {
+        let container = json!({});
+
+        let (result, ctx) = parse_test_field(&container, "value", FieldPresence::Required);
+
+        assert!(result.is_none());
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::MissingRequiredProperty);
+        assert_eq!(ctx.errors[0].message, "Missing required field: value");
+        assert_eq!(ctx.errors[0].path, "tokens.motion.fast");
+    }
+
+    #[test]
+    fn parses_literal_field_value() {
+        let container = json!({
+            "value": {
+                "value": "fast"
+            }
+        });
+
+        let (result, ctx) = parse_test_field(&container, "value", FieldPresence::Required);
+
+        assert!(ctx.errors.is_empty());
+        assert_eq!(
+            result,
+            Some(RefOr::Literal(TestField {
+                value: String::from("fast"),
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_empty_string_ref_field_value() {
+        let container = json!({
+            "value": {
+                "$ref": ""
+            }
+        });
+
+        let (result, ctx) = parse_test_field(&container, "value", FieldPresence::Required);
+
+        assert!(ctx.errors.is_empty());
+        assert_eq!(
+            result,
+            Some(RefOr::Ref(JsonRef::new_local_pointer(
+                String::new(),
+                JsonPointer::new(),
+            )))
+        );
+    }
+
+    #[test]
+    fn parses_json_pointer_ref_field_value() {
+        let container = json!({
+            "value": {
+                "$ref": "#/tokens/motion/fast"
+            }
+        });
+
+        let (result, ctx) = parse_test_field(&container, "value", FieldPresence::Required);
+
+        assert!(ctx.errors.is_empty());
+        assert_eq!(
+            result,
+            Some(RefOr::Ref(JsonRef::new_local_pointer(
+                String::from("#/tokens/motion/fast"),
+                JsonPointer::from("#/tokens/motion/fast"),
+            )))
+        );
+    }
+
+    #[test]
+    fn treats_object_with_ref_and_other_properties_as_literal_value() {
+        let container = json!({
+            "value": {
+                "$ref": "#/tokens/motion/slow",
+                "value": "fast"
+            }
+        });
+
+        let (result, ctx) = parse_test_field(&container, "value", FieldPresence::Required);
+
+        assert!(ctx.errors.is_empty());
+        assert_eq!(
+            result,
+            Some(RefOr::Literal(TestField {
+                value: String::from("fast"),
+            }))
+        );
+    }
+
+    #[test]
+    fn returns_error_for_invalid_ref_pointer() {
+        let container = json!({
+            "value": {
+                "$ref": "tokens/motion/fast"
+            }
+        });
+
+        let (result, ctx) = parse_test_field(&container, "value", FieldPresence::Required);
+
+        assert!(result.is_none());
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidReference);
+        assert_eq!(
+            ctx.errors[0].message,
+            "Invalid JSON pointer: tokens/motion/fast"
+        );
+        assert_eq!(ctx.errors[0].path, "tokens.motion.fast");
+    }
+
+    #[test]
+    fn propagates_literal_parser_errors() {
+        let container = json!({
+            "value": 42
+        });
+
+        let (result, ctx) = parse_test_field(&container, "value", FieldPresence::Required);
+
+        assert!(result.is_none());
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
+        assert_eq!(ctx.errors[0].message, "Expected an object, but found: 42");
+        assert_eq!(ctx.errors[0].path, "tokens.motion.fast");
     }
 }

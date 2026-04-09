@@ -3,28 +3,65 @@
 
 use crate::{
     errors::DiagnosticCode,
+    ir::RefOr,
     token::{
-        ParseState, TryFromJson,
+        ParseState, TryFromJson, TryFromJsonField,
         utils::{
-            JsonFloatOrInteger, require_enum_string_with_mapping, require_float_or_integer,
-            require_object_field,
+            FieldPresence, FloatOrInteger, parse_field, require_enum_string_with_mapping,
+            require_float_or_integer,
         },
     },
 };
 
 /// The DTCG specification only accepts the "value" property for duration tokens, which is a string,
 /// to be either "ms" for milliseconds or "s" for seconds. This enum represents the unit of the duration token value.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DurationUnit {
     Ms,
     S,
 }
 
+impl<'a> TryFromJsonField<'a> for DurationUnit {
+    fn try_from_json_field(
+        ctx: &mut crate::ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        require_enum_string_with_mapping(
+            ctx,
+            path,
+            "unit",
+            value,
+            |s| match s {
+                "ms" => Some(Self::Ms),
+                "s" => Some(Self::S),
+                _ => None,
+            },
+            "ms, s",
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DurationValue(FloatOrInteger);
+
+impl<'a> TryFromJsonField<'a> for DurationValue {
+    fn try_from_json_field(
+        ctx: &mut crate::ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        require_float_or_integer(ctx, path, value).map(DurationValue)
+    }
+}
+
 /// Represents a duration token value, which consists of a numeric value and a unit
+#[derive(Debug, Clone, PartialEq)]
 pub struct DurationTokenValue {
     /// The numeric value of the duration, which can be either a signed integer or a float
-    pub value: f64,
+    pub value: RefOr<DurationValue>,
     /// The unit of the duration, which can be either milliseconds (ms) or seconds (s)
-    pub unit: DurationUnit,
+    pub unit: RefOr<DurationUnit>,
 }
 
 impl<'a> TryFromJson<'a> for DurationTokenValue {
@@ -35,36 +72,16 @@ impl<'a> TryFromJson<'a> for DurationTokenValue {
     ) -> ParseState<Self> {
         match value {
             serde_json::Value::Object(map) => {
-                // The DTCG specification defines that a duration token value shall have "value" property which is a number
-                // and a "unit" property, which is a string that can be either "ms" or "s"
-                let raw_value = require_object_field(ctx, path, map, "value");
-                let raw_unit = require_object_field(ctx, path, map, "unit");
+                let value =
+                    parse_field::<DurationValue>(ctx, path, map, "value", FieldPresence::Required);
+                let unit =
+                    parse_field::<DurationUnit>(ctx, path, map, "unit", FieldPresence::Required);
 
-                let parsed_value = raw_value.and_then(|raw| {
-                    require_float_or_integer(ctx, path, raw).map(|number| match number {
-                        JsonFloatOrInteger::Float(parsed_float) => parsed_float,
-                        JsonFloatOrInteger::Integer(parsed_int) => parsed_int as f64,
-                    })
-                });
-
-                let parsed_unit = raw_unit.and_then(|raw| {
-                    require_enum_string_with_mapping(
-                        ctx,
-                        path,
-                        "unit",
-                        raw,
-                        |s| match s {
-                            "ms" => Some(DurationUnit::Ms),
-                            "s" => Some(DurationUnit::S),
-                            _ => None,
-                        },
-                        "ms, s",
-                    )
-                });
-
-                match (parsed_value, parsed_unit) {
-                    (Some(value), Some(unit)) => ParseState::Parsed(Self { value, unit }),
-                    _ => ParseState::Skipped,
+                match (value, unit) {
+                    (Some(value), Some(unit)) => {
+                        ParseState::Parsed(DurationTokenValue { value, unit })
+                    }
+                    _ => ParseState::Skipped, // The errors have already been pushed by parse_field, so we just return Skipped here
                 }
             }
             _ => {
@@ -113,8 +130,11 @@ mod tests {
             panic!("expected duration token to parse successfully");
         };
 
-        assert_eq!(parsed.value, 150.0);
-        assert!(matches!(parsed.unit, DurationUnit::Ms));
+        assert_eq!(
+            parsed.value,
+            RefOr::Literal(DurationValue(FloatOrInteger::Integer(150)))
+        );
+        assert!(matches!(parsed.unit, RefOr::Literal(DurationUnit::Ms)));
     }
 
     #[test]
@@ -132,8 +152,11 @@ mod tests {
             panic!("expected duration token to parse successfully");
         };
 
-        assert_eq!(parsed.value, 0.25);
-        assert!(matches!(parsed.unit, DurationUnit::S));
+        assert_eq!(
+            parsed.value,
+            RefOr::Literal(DurationValue(FloatOrInteger::Float(0.25)))
+        );
+        assert!(matches!(parsed.unit, RefOr::Literal(DurationUnit::S)));
     }
 
     #[test]
@@ -151,8 +174,11 @@ mod tests {
             panic!("expected duration token to parse successfully");
         };
 
-        assert_eq!(parsed.value, -50.0);
-        assert!(matches!(parsed.unit, DurationUnit::Ms));
+        assert_eq!(
+            parsed.value,
+            RefOr::Literal(DurationValue(FloatOrInteger::Integer(-50)))
+        );
+        assert!(matches!(parsed.unit, RefOr::Literal(DurationUnit::Ms)));
     }
 
     #[test]

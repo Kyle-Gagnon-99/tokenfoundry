@@ -2,31 +2,64 @@
 //! a single dimension in the UI, such as a position, width, height, radius, size, or thickness
 use crate::{
     errors::DiagnosticCode,
+    ir::RefOr,
     token::{
-        ParseState, TryFromJson,
+        ParseState, TryFromJson, TryFromJsonField,
         utils::{
-            JsonFloatOrInteger, require_enum_string_with_mapping, require_float_or_integer,
-            require_object_field,
+            FieldPresence, FloatOrInteger, parse_field, require_enum_string_with_mapping,
+            require_float_or_integer,
         },
     },
 };
 
-pub enum DimensionNumber {
-    Integer(i64),
-    Float(f64),
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct DimensionNumber(FloatOrInteger);
+
+impl<'a> TryFromJsonField<'a> for DimensionNumber {
+    fn try_from_json_field(
+        ctx: &mut crate::ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        require_float_or_integer(ctx, path, value).map(DimensionNumber)
+    }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum DimensionUnit {
     Px,
     Rem,
 }
 
+impl<'a> TryFromJsonField<'a> for DimensionUnit {
+    fn try_from_json_field(
+        ctx: &mut crate::ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        require_enum_string_with_mapping(
+            ctx,
+            path,
+            "dimension unit",
+            value,
+            |s| match s {
+                "px" => Some(DimensionUnit::Px),
+                "rem" => Some(DimensionUnit::Rem),
+                _ => None,
+            },
+            "px, rem",
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 /// Represents a dimension token value, which consists of a numeric value and a unit
 pub struct DimensionTokenValue {
     /// The numeric value of the dimension, which can be either a signed integer or a float
-    pub value: DimensionNumber,
+    pub value: RefOr<DimensionNumber>,
     /// The unit of the dimension, which can be either pixels (px) or rems (rem)
-    pub unit: DimensionUnit,
+    pub unit: RefOr<DimensionUnit>,
 }
 
 impl<'a> TryFromJson<'a> for DimensionTokenValue {
@@ -40,42 +73,27 @@ impl<'a> TryFromJson<'a> for DimensionTokenValue {
     {
         match value {
             serde_json::Value::Object(map) => {
-                // The DTCG specification defines that a dimension token value shall have a "value" property, which is a number
-                // and a "unit" property, which is a string that can be either "px" or "rem"
-                let raw_value = require_object_field(ctx, path, map, "value");
-                let raw_unit = require_object_field(ctx, path, map, "unit");
+                let value_field = parse_field::<DimensionNumber>(
+                    ctx,
+                    path,
+                    map,
+                    "value",
+                    FieldPresence::Required,
+                );
+                let unit_field =
+                    parse_field::<DimensionUnit>(ctx, path, map, "unit", FieldPresence::Required);
 
-                let parsed_value = raw_value.and_then(|raw| {
-                    require_float_or_integer(ctx, path, raw).map(|number| match number {
-                        JsonFloatOrInteger::Integer(value) => DimensionNumber::Integer(value),
-                        JsonFloatOrInteger::Float(value) => DimensionNumber::Float(value),
-                    })
-                });
-
-                let parsed_unit = raw_unit.and_then(|raw| {
-                    require_enum_string_with_mapping(
-                        ctx,
-                        path,
-                        "unit",
-                        raw,
-                        |s| match s {
-                            "px" => Some(DimensionUnit::Px),
-                            "rem" => Some(DimensionUnit::Rem),
-                            _ => None,
-                        },
-                        "px, rem",
-                    )
-                });
-
-                match (parsed_value, parsed_unit) {
-                    (Some(value), Some(unit)) => ParseState::Parsed(Self { value, unit }),
+                match (value_field, unit_field) {
+                    (Some(value), Some(unit)) => {
+                        ParseState::Parsed(DimensionTokenValue { value, unit })
+                    }
                     _ => ParseState::Skipped,
                 }
             }
             _ => {
                 ctx.push_to_errors(
                     DiagnosticCode::InvalidPropertyType,
-                    format!("The dimension token must be an object"),
+                    "The dimension token must be an object",
                     path.into(),
                 );
                 ParseState::Skipped
@@ -87,7 +105,11 @@ impl<'a> TryFromJson<'a> for DimensionTokenValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FileFormat, ParserContext, errors::DiagnosticCode};
+    use crate::{
+        FileFormat, ParserContext,
+        errors::DiagnosticCode,
+        ir::{JsonPointer, JsonRef},
+    };
     use serde_json::json;
 
     fn make_context() -> ParserContext {
@@ -105,6 +127,14 @@ mod tests {
         (result, ctx)
     }
 
+    fn expect_parsed(result: ParseState<DimensionTokenValue>) -> DimensionTokenValue {
+        let ParseState::Parsed(parsed) = result else {
+            panic!("expected dimension token to parse successfully");
+        };
+
+        parsed
+    }
+
     #[test]
     fn parses_integer_value_with_px_unit() {
         let value = json!({
@@ -116,12 +146,13 @@ mod tests {
 
         assert!(ctx.errors.is_empty());
 
-        let ParseState::Parsed(parsed) = result else {
-            panic!("expected dimension token to parse successfully");
-        };
+        let parsed = expect_parsed(result);
 
-        assert!(matches!(parsed.value, DimensionNumber::Integer(16)));
-        assert!(matches!(parsed.unit, DimensionUnit::Px));
+        assert_eq!(
+            parsed.value,
+            RefOr::Literal(DimensionNumber(FloatOrInteger::Integer(16)))
+        );
+        assert_eq!(parsed.unit, RefOr::Literal(DimensionUnit::Px));
     }
 
     #[test]
@@ -135,15 +166,13 @@ mod tests {
 
         assert!(ctx.errors.is_empty());
 
-        let ParseState::Parsed(parsed) = result else {
-            panic!("expected dimension token to parse successfully");
-        };
+        let parsed = expect_parsed(result);
 
-        match parsed.value {
-            DimensionNumber::Float(number) => assert_eq!(number, 1.5),
-            DimensionNumber::Integer(_) => panic!("expected a float dimension value"),
-        }
-        assert!(matches!(parsed.unit, DimensionUnit::Rem));
+        assert_eq!(
+            parsed.value,
+            RefOr::Literal(DimensionNumber(FloatOrInteger::Float(1.5)))
+        );
+        assert_eq!(parsed.unit, RefOr::Literal(DimensionUnit::Rem));
     }
 
     #[test]
@@ -157,12 +186,91 @@ mod tests {
 
         assert!(ctx.errors.is_empty());
 
-        let ParseState::Parsed(parsed) = result else {
-            panic!("expected dimension token to parse successfully");
-        };
+        let parsed = expect_parsed(result);
 
-        assert!(matches!(parsed.value, DimensionNumber::Integer(-24)));
-        assert!(matches!(parsed.unit, DimensionUnit::Px));
+        assert_eq!(
+            parsed.value,
+            RefOr::Literal(DimensionNumber(FloatOrInteger::Integer(-24)))
+        );
+        assert_eq!(parsed.unit, RefOr::Literal(DimensionUnit::Px));
+    }
+
+    #[test]
+    fn parses_ref_value_with_literal_unit() {
+        let value = json!({
+            "value": { "$ref": "#/tokens/size/base/value" },
+            "unit": "px"
+        });
+
+        let (result, ctx) = parse_dimension(&value);
+
+        assert!(ctx.errors.is_empty());
+
+        let parsed = expect_parsed(result);
+
+        assert_eq!(
+            parsed.value,
+            RefOr::Ref(JsonRef::new_local_pointer(
+                "#/tokens/size/base/value".to_string(),
+                JsonPointer::from("#/tokens/size/base/value"),
+            ))
+        );
+        assert_eq!(parsed.unit, RefOr::Literal(DimensionUnit::Px));
+    }
+
+    #[test]
+    fn parses_literal_value_with_ref_unit() {
+        let value = json!({
+            "value": 16,
+            "unit": { "$ref": "#/tokens/size/base/unit" }
+        });
+
+        let (result, ctx) = parse_dimension(&value);
+
+        assert!(ctx.errors.is_empty());
+
+        let parsed = expect_parsed(result);
+
+        assert_eq!(
+            parsed.value,
+            RefOr::Literal(DimensionNumber(FloatOrInteger::Integer(16)))
+        );
+        assert_eq!(
+            parsed.unit,
+            RefOr::Ref(JsonRef::new_local_pointer(
+                "#/tokens/size/base/unit".to_string(),
+                JsonPointer::from("#/tokens/size/base/unit"),
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_empty_string_refs_for_value_and_unit() {
+        let value = json!({
+            "value": { "$ref": "" },
+            "unit": { "$ref": "" }
+        });
+
+        let (result, ctx) = parse_dimension(&value);
+
+        assert!(ctx.errors.is_empty());
+
+        let parsed = expect_parsed(result);
+
+        assert_eq!(
+            parsed.value,
+            RefOr::Ref(JsonRef::new_local_pointer(
+                String::new(),
+                JsonPointer::new(),
+            ))
+        );
+        assert_eq!(
+            parsed.unit,
+            RefOr::Ref(JsonRef::new_local_pointer(
+                String::new(),
+                JsonPointer::new(),
+            ))
+        );
     }
 
     #[test]
@@ -211,6 +319,47 @@ mod tests {
                 .iter()
                 .all(|error| error.path == "tokens.size.small")
         );
+    }
+
+    #[test]
+    fn skips_when_value_ref_pointer_is_invalid() {
+        let value = json!({
+            "value": { "$ref": "tokens/size/base/value" },
+            "unit": "px"
+        });
+
+        let (result, ctx) = parse_dimension(&value);
+
+        assert!(matches!(result, ParseState::Skipped));
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidReference);
+        assert_eq!(
+            ctx.errors[0].message,
+            "Invalid JSON pointer: tokens/size/base/value"
+        );
+        assert_eq!(ctx.errors[0].path, "tokens.size.small");
+    }
+
+    #[test]
+    fn skips_when_ref_object_has_extra_properties() {
+        let value = json!({
+            "value": {
+                "$ref": "#/tokens/size/base/value",
+                "fallback": 16
+            },
+            "unit": "px"
+        });
+
+        let (result, ctx) = parse_dimension(&value);
+
+        assert!(matches!(result, ParseState::Skipped));
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
+        assert_eq!(
+            ctx.errors[0].message,
+            "Expected a number, but found: {\"$ref\":\"#/tokens/size/base/value\",\"fallback\":16}"
+        );
+        assert_eq!(ctx.errors[0].path, "tokens.size.small");
     }
 
     #[test]

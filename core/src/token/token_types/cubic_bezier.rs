@@ -4,60 +4,107 @@
 use crate::{
     ParserContext,
     errors::DiagnosticCode,
-    token::{ParseState, TryFromJson},
+    ir::{RefOr, parse_ref_or_value},
+    token::{ParseState, TryFromJson, TryFromJsonField, utils::FloatOrInteger},
 };
 
 /// Represents a cubic bezier token value, which consists of four numeric values representing the control points of the cubic bezier curve
 /// The DTCG specification defines that a cubic bezier token value shall have "x1", "y1", "x2", and "y2" properties, which are all numbers
 /// The first control point is represented by (x1, y1) and the second control point is represented by (x2, y2)
 /// The y coordinates of P1 and P2 can be any real number, but the x coordinates of P1 and P2 must be in the range [0, 1], inclusive
-pub struct CubicBezierTokenValue {
-    pub x1: f64,
-    pub y1: f64,
-    pub x2: f64,
-    pub y2: f64,
-}
+#[derive(Debug, Clone, PartialEq)]
+pub struct CubicBezierTokenValue([RefOr<FloatOrInteger>; 4]);
 
 impl CubicBezierTokenValue {
-    /// Validates the cubic bezier token value according to the DTCG specification
-    ///
-    /// # Returns
-    ///
-    /// Returns true if the value is valid, and false otherwise
-    pub fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        let mut is_valid = true;
-
-        if self.x1 < 0.0 || self.x1 > 1.0 {
-            ctx.push_to_errors(
-                DiagnosticCode::InvalidTokenValue,
-                format!(
-                    "Expected x1 of cubic bezier token value to be in the range [0, 1], but found {}",
-                    self.x1
-                ),
-                format!("{}.$value.[0]", path),
-            );
-            is_valid = false;
+    pub fn get_x1(&self) -> Option<f64> {
+        match self.0[0] {
+            RefOr::Literal(FloatOrInteger::Float(value)) => Some(value),
+            RefOr::Literal(FloatOrInteger::Integer(value)) => Some(value as f64),
+            RefOr::Ref(_) => None,
         }
+    }
 
-        if self.x2 < 0.0 || self.x2 > 1.0 {
-            ctx.push_to_errors(
-                DiagnosticCode::InvalidTokenValue,
-                format!(
-                    "Expected x2 of cubic bezier token value to be in the range [0, 1], but found {}",
-                    self.x2
-                ),
-                format!("{}.$value.[2]", path),
-            );
-            is_valid = false;
+    pub fn get_y1(&self) -> Option<f64> {
+        match self.0[1] {
+            RefOr::Literal(FloatOrInteger::Float(value)) => Some(value),
+            RefOr::Literal(FloatOrInteger::Integer(value)) => Some(value as f64),
+            RefOr::Ref(_) => None,
         }
+    }
 
-        is_valid
+    pub fn get_x2(&self) -> Option<f64> {
+        match self.0[2] {
+            RefOr::Literal(FloatOrInteger::Float(value)) => Some(value),
+            RefOr::Literal(FloatOrInteger::Integer(value)) => Some(value as f64),
+            RefOr::Ref(_) => None,
+        }
+    }
+
+    pub fn get_y2(&self) -> Option<f64> {
+        match self.0[3] {
+            RefOr::Literal(FloatOrInteger::Float(value)) => Some(value),
+            RefOr::Literal(FloatOrInteger::Integer(value)) => Some(value as f64),
+            RefOr::Ref(_) => None,
+        }
     }
 }
 
-pub struct CubicBezierToken {
-    pub value: CubicBezierTokenValue,
+impl<'a> TryFromJsonField<'a> for CubicBezierTokenValue {
+    fn try_from_json_field(
+        ctx: &mut ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        match value {
+            serde_json::Value::Array(arr_val) => {
+                if arr_val.len() != 4 {
+                    ctx.push_to_errors(
+                        DiagnosticCode::InvalidPropertyValue,
+                        format!(
+                            "Expected an array of 4 numbers, but found an array of length {}",
+                            arr_val.len()
+                        ),
+                        path.into(),
+                    );
+                    return None;
+                }
+
+                let mut values: [RefOr<FloatOrInteger>; 4] =
+                    core::array::from_fn(|_| RefOr::Literal(FloatOrInteger::Integer(0)));
+                for (index, item) in arr_val.iter().enumerate() {
+                    let parsed_val = parse_ref_or_value::<FloatOrInteger>(ctx, path, item);
+                    match parsed_val {
+                        Some(parsed) => values[index] = parsed,
+                        None => {
+                            ctx.push_to_errors(
+                                DiagnosticCode::InvalidPropertyValue,
+                                format!(
+                                    "Expected a number or reference to a number, but found {}",
+                                    item
+                                ),
+                                format!("{}.{}", path, index),
+                            );
+                            return None;
+                        }
+                    }
+                }
+
+                Some(Self(values))
+            }
+            _ => {
+                ctx.push_to_errors(
+                    DiagnosticCode::InvalidPropertyValue,
+                    format!("Expected an array of 4 numbers, but found {}", value),
+                    path.into(),
+                );
+                None
+            }
+        }
+    }
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CubicBezierToken(pub RefOr<CubicBezierTokenValue>);
 
 impl<'a> TryFromJson<'a> for CubicBezierToken {
     fn try_from_json(
@@ -65,79 +112,9 @@ impl<'a> TryFromJson<'a> for CubicBezierToken {
         path: &str,
         value: &'a serde_json::Value,
     ) -> crate::token::ParseState<Self> {
-        match value {
-            serde_json::Value::Array(array) => {
-                // First, we need to check if the array has exactly 4 items
-                if array.len() != 4 {
-                    ctx.push_to_errors(
-                        DiagnosticCode::InvalidTokenValue,
-                        format!(
-                            "Expected cubic bezier token value to be an array of 4 numbers, but found an array of length {}",
-                            array.len()
-                        ),
-                        path.into(),
-                    );
-                    return ParseState::Skipped;
-                }
-
-                // Then, we need to check if all items in the array are numbers and parse them as f64
-                let mut values = [0.0; 4];
-                for (index, item) in array.iter().enumerate() {
-                    match item {
-                        serde_json::Value::Number(num) => {
-                            if let Some(parsed) = num.as_f64() {
-                                values[index] = parsed;
-                            } else {
-                                ctx.push_to_errors(
-                                    DiagnosticCode::InvalidTokenValue,
-                                    format!(
-                                        "Expected cubic bezier token value to be an array of numbers, but found a number that cannot be parsed as f64: {}",
-                                        num
-                                    ),
-                                    format!("{}.{}", path, index),
-                                );
-                                return ParseState::Skipped;
-                            }
-                        }
-                        _ => {
-                            ctx.push_to_errors(
-                                DiagnosticCode::InvalidTokenValue,
-                                format!(
-                                    "Expected cubic bezier token value to be an array of numbers, but found a non-number value: {}",
-                                    item
-                                ),
-                                format!("{}.{}", path, index),
-                            );
-                            return ParseState::Skipped;
-                        }
-                    }
-                }
-
-                // Finally, we can construct the CubicBezierTokenValue and validate it
-                let token_value = CubicBezierTokenValue {
-                    x1: values[0],
-                    y1: values[1],
-                    x2: values[2],
-                    y2: values[3],
-                };
-
-                if !token_value.validate(ctx, path) {
-                    return ParseState::Skipped;
-                }
-
-                ParseState::Parsed(CubicBezierToken { value: token_value })
-            }
-            _ => {
-                ctx.push_to_errors(
-                    DiagnosticCode::InvalidTokenValue,
-                    format!(
-                        "Expected cubic bezier token value to be an array of 4 numbers, but found {}",
-                        value
-                    ),
-                    path.into(),
-                );
-                ParseState::Skipped
-            }
+        match parse_ref_or_value::<CubicBezierTokenValue>(ctx, path, value) {
+            Some(parsed_value) => ParseState::Parsed(Self(parsed_value)),
+            None => ParseState::Skipped,
         }
     }
 }
@@ -145,7 +122,11 @@ impl<'a> TryFromJson<'a> for CubicBezierToken {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FileFormat, ParserContext, errors::DiagnosticCode};
+    use crate::{
+        FileFormat, ParserContext,
+        errors::DiagnosticCode,
+        ir::{JsonPointer, JsonRef, RefOr},
+    };
     use serde_json::json;
 
     fn make_context() -> ParserContext {
@@ -160,38 +141,88 @@ mod tests {
         (result, ctx)
     }
 
-    #[test]
-    fn parses_valid_cubic_bezier_array() {
-        let value = json!([0.25, 0.1, 0.25, 1.0]);
-
-        let (result, ctx) = parse_cubic_bezier(&value);
-
-        assert!(ctx.errors.is_empty());
-
-        let ParseState::Parsed(parsed) = result else {
+    fn expect_parsed(result: ParseState<CubicBezierToken>) -> RefOr<CubicBezierTokenValue> {
+        let ParseState::Parsed(CubicBezierToken(parsed)) = result else {
             panic!("expected cubic bezier token to parse successfully");
         };
 
-        assert_eq!(parsed.value.x1, 0.25);
-        assert_eq!(parsed.value.y1, 0.1);
-        assert_eq!(parsed.value.x2, 0.25);
-        assert_eq!(parsed.value.y2, 1.0);
+        parsed
     }
 
     #[test]
-    fn parses_boundary_x_values() {
-        let value = json!([0.0, -2.0, 1.0, 2.0]);
+    fn parses_literal_array_with_integer_and_float_values() {
+        let value = json!([0.25, 0, 1, 1.0]);
 
         let (result, ctx) = parse_cubic_bezier(&value);
 
         assert!(ctx.errors.is_empty());
 
-        let ParseState::Parsed(parsed) = result else {
-            panic!("expected cubic bezier token to parse successfully");
+        assert_eq!(
+            expect_parsed(result),
+            RefOr::Literal(CubicBezierTokenValue([
+                RefOr::Literal(FloatOrInteger::Float(0.25)),
+                RefOr::Literal(FloatOrInteger::Integer(0)),
+                RefOr::Literal(FloatOrInteger::Integer(1)),
+                RefOr::Literal(FloatOrInteger::Float(1.0)),
+            ]))
+        );
+    }
+
+    #[test]
+    fn parses_array_with_literal_and_reference_values() {
+        let value = json!([
+            0.0,
+            { "$ref": "#/tokens/motion/shared/y1" },
+            { "$ref": "" },
+            -2.5
+        ]);
+
+        let (result, ctx) = parse_cubic_bezier(&value);
+
+        assert!(ctx.errors.is_empty());
+
+        let parsed = expect_parsed(result);
+
+        assert_eq!(
+            parsed,
+            RefOr::Literal(CubicBezierTokenValue([
+                RefOr::Literal(FloatOrInteger::Float(0.0)),
+                RefOr::Ref(JsonRef::new_local_pointer(
+                    "#/tokens/motion/shared/y1".to_string(),
+                    JsonPointer::from("#/tokens/motion/shared/y1"),
+                )),
+                RefOr::Ref(JsonRef::new_local_pointer(
+                    String::new(),
+                    JsonPointer::new(),
+                )),
+                RefOr::Literal(FloatOrInteger::Float(-2.5)),
+            ]))
+        );
+
+        let RefOr::Literal(parsed_value) = parsed else {
+            panic!("expected a literal cubic bezier value");
         };
 
-        assert_eq!(parsed.value.x1, 0.0);
-        assert_eq!(parsed.value.x2, 1.0);
+        assert_eq!(parsed_value.get_x1(), Some(0.0));
+        assert_eq!(parsed_value.get_y1(), None);
+        assert_eq!(parsed_value.get_x2(), None);
+        assert_eq!(parsed_value.get_y2(), Some(-2.5));
+    }
+
+    #[test]
+    fn parses_top_level_ref_object() {
+        let value = json!({ "$ref": "#/tokens/motion/shared/ease" });
+
+        let (result, ctx) = parse_cubic_bezier(&value);
+
+        assert!(ctx.errors.is_empty());
+        assert_eq!(
+            expect_parsed(result),
+            RefOr::Ref(JsonRef::new_local_pointer(
+                "#/tokens/motion/shared/ease".to_string(),
+                JsonPointer::from("#/tokens/motion/shared/ease"),
+            ))
+        );
     }
 
     #[test]
@@ -202,28 +233,56 @@ mod tests {
 
         assert!(matches!(result, ParseState::Skipped));
         assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyValue);
         assert_eq!(
             ctx.errors[0].message,
-            "Expected cubic bezier token value to be an array of 4 numbers, but found an array of length 3"
+            "Expected an array of 4 numbers, but found an array of length 3"
         );
         assert_eq!(ctx.errors[0].path, "tokens.motion.ease");
     }
 
     #[test]
-    fn skips_when_array_contains_non_number_value() {
+    fn skips_when_array_contains_non_number_value_and_reports_both_diagnostics() {
         let value = json!([0.25, "bad", 0.25, 1.0]);
 
         let (result, ctx) = parse_cubic_bezier(&value);
 
         assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors.len(), 2);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
         assert_eq!(
             ctx.errors[0].message,
-            "Expected cubic bezier token value to be an array of numbers, but found a non-number value: \"bad\""
+            "Expected a number, but found: \"bad\""
         );
-        assert_eq!(ctx.errors[0].path, "tokens.motion.ease.1");
+        assert_eq!(ctx.errors[0].path, "tokens.motion.ease");
+        assert_eq!(ctx.errors[1].code, DiagnosticCode::InvalidPropertyValue);
+        assert_eq!(
+            ctx.errors[1].message,
+            "Expected a number or reference to a number, but found \"bad\""
+        );
+        assert_eq!(ctx.errors[1].path, "tokens.motion.ease.1");
+    }
+
+    #[test]
+    fn skips_when_array_contains_invalid_reference_and_reports_both_diagnostics() {
+        let value = json!([0.25, { "$ref": "tokens/motion/shared/y1" }, 0.25, 1.0]);
+
+        let (result, ctx) = parse_cubic_bezier(&value);
+
+        assert!(matches!(result, ParseState::Skipped));
+        assert_eq!(ctx.errors.len(), 2);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidReference);
+        assert_eq!(
+            ctx.errors[0].message,
+            "Invalid JSON pointer: tokens/motion/shared/y1"
+        );
+        assert_eq!(ctx.errors[0].path, "tokens.motion.ease");
+        assert_eq!(ctx.errors[1].code, DiagnosticCode::InvalidPropertyValue);
+        assert_eq!(
+            ctx.errors[1].message,
+            "Expected a number or reference to a number, but found {\"$ref\":\"tokens/motion/shared/y1\"}"
+        );
+        assert_eq!(ctx.errors[1].path, "tokens.motion.ease.1");
     }
 
     #[test]
@@ -234,67 +293,11 @@ mod tests {
 
         assert!(matches!(result, ParseState::Skipped));
         assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyValue);
         assert_eq!(
             ctx.errors[0].message,
-            "Expected cubic bezier token value to be an array of 4 numbers, but found \"ease-in-out\""
+            "Expected an array of 4 numbers, but found \"ease-in-out\""
         );
         assert_eq!(ctx.errors[0].path, "tokens.motion.ease");
-    }
-
-    #[test]
-    fn validate_accepts_in_range_x_values() {
-        let mut ctx = make_context();
-        let value = CubicBezierTokenValue {
-            x1: 0.0,
-            y1: 10.0,
-            x2: 1.0,
-            y2: -10.0,
-        };
-
-        let is_valid = value.validate(&mut ctx, "tokens.motion.ease");
-
-        assert!(is_valid);
-        assert!(ctx.errors.is_empty());
-    }
-
-    #[test]
-    fn validate_rejects_out_of_range_x_values_and_collects_both_errors() {
-        let mut ctx = make_context();
-        let value = CubicBezierTokenValue {
-            x1: -0.1,
-            y1: 0.0,
-            x2: 1.1,
-            y2: 1.0,
-        };
-
-        let is_valid = value.validate(&mut ctx, "tokens.motion.ease");
-
-        assert!(!is_valid);
-        assert_eq!(ctx.errors.len(), 2);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Expected x1 of cubic bezier token value to be in the range [0, 1], but found -0.1"
-        );
-        assert_eq!(ctx.errors[0].path, "tokens.motion.ease.$value.[0]");
-        assert_eq!(ctx.errors[1].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[1].message,
-            "Expected x2 of cubic bezier token value to be in the range [0, 1], but found 1.1"
-        );
-        assert_eq!(ctx.errors[1].path, "tokens.motion.ease.$value.[2]");
-    }
-
-    #[test]
-    fn parser_skips_when_validation_fails() {
-        let value = json!([-0.1, 0.0, 1.1, 1.0]);
-
-        let (result, ctx) = parse_cubic_bezier(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 2);
-        assert_eq!(ctx.errors[0].path, "tokens.motion.ease.$value.[0]");
-        assert_eq!(ctx.errors[1].path, "tokens.motion.ease.$value.[2]");
     }
 }

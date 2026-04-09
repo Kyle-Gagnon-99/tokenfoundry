@@ -13,6 +13,8 @@ pub enum TokenValue {
     Color(color::ColorTokenValue),
     FontFamily(font_family::FontFamilyTokenValue),
     FontWeight(font_weight::FontWeightTokenValue),
+    CubicBezier(cubic_bezier::CubicBezierTokenValue),
+    Duration(duration::DurationTokenValue),
 }
 
 pub enum TokenType {
@@ -20,4 +22,6 @@ pub enum TokenType {
     Color,
     FontFamily,
     FontWeight,
+    CubicBezier,
+    Duration,
 }

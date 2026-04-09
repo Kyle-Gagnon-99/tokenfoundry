@@ -5,12 +5,12 @@ use std::f64;
 use crate::{
     ParserContext,
     errors::DiagnosticCode,
+    ir::{RefOr, parse_ref_or_value},
     token::{
-        ParseState, TryFromJson,
-        ir::RefOr,
+        ParseState, TryFromJson, TryFromJsonField,
         utils::{
-            require_array, require_enum_string_with_mapping, require_number, require_object_field,
-            require_string,
+            FieldPresence, FloatOrInteger, parse_field, parse_field_no_ref,
+            require_enum_string_with_mapping,
         },
     },
 };
@@ -250,7 +250,7 @@ mod validation {
 
 macro_rules! define_three_component_color_space {
     ($name:ident, $c1:ident, $c2:ident, $c3:ident) => {
-        #[derive(Debug, Clone)]
+        #[derive(Debug, Clone, PartialEq)]
         pub struct $name {
             $c1: RefOr<ColorComponentElement<f64>>,
             $c2: RefOr<ColorComponentElement<f64>>,
@@ -281,13 +281,54 @@ macro_rules! define_three_component_color_space {
 
 /// The DTCG specification defines that a color token's components can either be a "none" keyword string,
 /// or a number
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ColorComponentElement<T> {
     Value(T),
     None,
 }
 
+impl<'a> TryFromJsonField<'a> for ColorComponentElement<f64> {
+    fn try_from_json_field(
+        ctx: &mut ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        match value {
+            serde_json::Value::String(str_val) => {
+                if str_val.to_lowercase() == "none" {
+                    Some(ColorComponentElement::None)
+                } else {
+                    ctx.push_to_errors(DiagnosticCode::InvalidTokenValue, format!(
+                        "Expected a string with the value 'none' or a number for color components, but got a string with the value '{}'",
+                        str_val
+                    ), path.into());
+                    None
+                }
+            }
+            serde_json::Value::Number(num_val) => {
+                if let Some(f64_val) = num_val.as_f64() {
+                    Some(ColorComponentElement::Value(f64_val))
+                } else {
+                    ctx.push_to_errors(DiagnosticCode::InvalidTokenValue, format!(
+                        "Expected a string with the value 'none' or a number for color components, but got a number that cannot be represented as f64: {}",
+                        num_val
+                    ), path.into());
+                    None
+                }
+            }
+            _ => {
+                ctx.push_to_errors(DiagnosticCode::InvalidTokenValue, format!(
+                    "Expected a string with the value 'none' or a number for color components, but got a value of type {}",
+                    value
+                ), path.into());
+                None
+            }
+        }
+    }
+}
+
 /// The DTCG specification defines the valid color spaces that can be used in color tokens.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ColorSpace {
     SRGB,
     SRGBLinear,
@@ -305,230 +346,77 @@ pub enum ColorSpace {
     XYZD50,
 }
 
-pub trait ValidateColorComponentValue {
-    /// Validates that the color component values of a color token are valid according to the DTCG specification.
-    /// This method is typically implemented by the color component structs (e.g. `SRGB`, `HSL`, etc.) and is called by the `validate` method of the `ColorTokenValue` struct to validate the color component values of a color token.
-    ///
-    /// # Arguments
-    ///
-    /// - `ctx` - The parser context to push errors to if the color component values are invalid
-    /// - `path` - The path to the color token in the token file (e.g. "tokens.colors.primary"), which is used in error messages when pushing errors to the parser context
-    ///
-    /// # Returns
-    ///
-    /// - `true` if the color component values are valid, `false` otherwise
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool;
+impl<'a> TryFromJsonField<'a> for ColorSpace {
+    fn try_from_json_field(
+        ctx: &mut ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        let mapping = [
+            ("srgb", ColorSpace::SRGB),
+            ("srgb-linear", ColorSpace::SRGBLinear),
+            ("hsl", ColorSpace::HSL),
+            ("hwb", ColorSpace::HWB),
+            ("cielab", ColorSpace::CIELAB),
+            ("lch", ColorSpace::LCH),
+            ("oklab", ColorSpace::OKLAB),
+            ("oklch", ColorSpace::OKLCH),
+            ("display-p3", ColorSpace::DisplayP3),
+            ("a98rgb", ColorSpace::A98RGB),
+            ("prophoto-rgb", ColorSpace::ProPhotoRGB),
+            ("rec2020", ColorSpace::Rec2020),
+            ("xyz-d65", ColorSpace::XYZD65),
+            ("xyz-d50", ColorSpace::XYZD50),
+        ];
+        require_enum_string_with_mapping(
+            ctx,
+            path,
+            "colorSpace",
+            value,
+            |v| {
+                mapping
+                    .iter()
+                    .find(|(key, _)| *key == v.to_lowercase())
+                    .map(|(_, color_space)| color_space.clone())
+            },
+            "srgb, srgb-linear, hsl, hwb, cielab, lch, oklab, oklch, display-p3, a98rgb, prophoto-rgb, rec2020, xyz-d65, xyz-d50",
+        )
+    }
 }
 
 define_three_component_color_space!(SRGB, red, green, blue);
 
-/* impl ValidateColorComponentValue for SRGB {
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        let mut is_valid = true;
-        is_valid &= validation::validate_range(ctx, path, "red", &self.red, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "green", &self.green, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "blue", &self.blue, 0.0, 1.0, true);
-        is_valid
-    }
-} */
-
 define_three_component_color_space!(SRGBLinear, red, green, blue);
-
-/* impl ValidateColorComponentValue for SRGBLinear {
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        let mut is_valid = true;
-        is_valid &= validation::validate_range(ctx, path, "red", &self.red, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "green", &self.green, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "blue", &self.blue, 0.0, 1.0, true);
-        is_valid
-    }
-} */
 
 define_three_component_color_space!(HSL, hue, saturation, lightness);
 
-/* impl ValidateColorComponentValue for HSL {
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        let mut is_valid = true;
-        is_valid &= validation::validate_range(ctx, path, "hue", &self.hue, 0.0, 360.0, false);
-        is_valid &=
-            validation::validate_range(ctx, path, "saturation", &self.saturation, 0.0, 100.0, true);
-        is_valid &=
-            validation::validate_range(ctx, path, "lightness", &self.lightness, 0.0, 100.0, true);
-        is_valid
-    }
-} */
-
 define_three_component_color_space!(HWB, hue, whiteness, blackness);
-
-/* impl ValidateColorComponentValue for HWB {
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        let mut is_valid = true;
-        is_valid &= validation::validate_range(ctx, path, "hue", &self.hue, 0.0, 360.0, false);
-        is_valid &=
-            validation::validate_range(ctx, path, "whiteness", &self.whiteness, 0.0, 100.0, true);
-        is_valid &=
-            validation::validate_range(ctx, path, "blackness", &self.blackness, 0.0, 100.0, true);
-        is_valid
-    }
-} */
 
 define_three_component_color_space!(CIELAB, lightness, a, b);
 
-/* impl ValidateColorComponentValue for CIELAB {
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        let mut is_valid = true;
-        is_valid &=
-            validation::validate_range(ctx, path, "lightness", &self.lightness, 0.0, 100.0, true);
-        is_valid &= validation::validate_range(
-            ctx,
-            path,
-            "a",
-            &self.a,
-            f64::NEG_INFINITY,
-            f64::INFINITY,
-            false,
-        );
-        is_valid &= validation::validate_range(
-            ctx,
-            path,
-            "b",
-            &self.b,
-            f64::NEG_INFINITY,
-            f64::INFINITY,
-            false,
-        );
-        is_valid
-    }
-} */
-
 define_three_component_color_space!(LCH, lightness, chroma, hue);
-
-/* impl ValidateColorComponentValue for LCH {
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        let mut is_valid = true;
-        is_valid &=
-            validation::validate_range(ctx, path, "lightness", &self.lightness, 0.0, 100.0, true);
-        is_valid &= validation::validate_non_negative(ctx, path, "chroma", &self.chroma);
-        is_valid &= validation::validate_range(ctx, path, "hue", &self.hue, 0.0, 360.0, false);
-        is_valid
-    }
-} */
 
 define_three_component_color_space!(OKLAB, lightness, a, b);
 
-/* impl ValidateColorComponentValue for OKLAB {
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        let mut is_valid = true;
-        is_valid &=
-            validation::validate_range(ctx, path, "lightness", &self.lightness, 0.0, 100.0, true);
-        is_valid &= validation::validate_range(
-            ctx,
-            path,
-            "a",
-            &self.a,
-            f64::NEG_INFINITY,
-            f64::INFINITY,
-            false,
-        );
-        is_valid &= validation::validate_range(
-            ctx,
-            path,
-            "b",
-            &self.b,
-            f64::NEG_INFINITY,
-            f64::INFINITY,
-            false,
-        );
-        is_valid
-    }
-} */
-
 define_three_component_color_space!(OKLCH, lightness, chroma, hue);
-
-/* impl ValidateColorComponentValue for OKLCH {
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        let mut is_valid = true;
-        is_valid &=
-            validation::validate_range(ctx, path, "lightness", &self.lightness, 0.0, 100.0, true);
-        is_valid &= validation::validate_non_negative(ctx, path, "chroma", &self.chroma);
-        is_valid &= validation::validate_range(ctx, path, "hue", &self.hue, 0.0, 360.0, false);
-        is_valid
-    }
-} */
 
 define_three_component_color_space!(DisplayP3, red, green, blue);
 
-/* impl ValidateColorComponentValue for DisplayP3 {
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        let mut is_valid = true;
-        is_valid &= validation::validate_range(ctx, path, "red", &self.red, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "green", &self.green, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "blue", &self.blue, 0.0, 1.0, true);
-        is_valid
-    }
-} */
-
 define_three_component_color_space!(A98RGB, red, green, blue);
-
-/* impl ValidateColorComponentValue for A98RGB {
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        let mut is_valid = true;
-        is_valid &= validation::validate_range(ctx, path, "red", &self.red, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "green", &self.green, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "blue", &self.blue, 0.0, 1.0, true);
-        is_valid
-    }
-} */
 
 define_three_component_color_space!(ProPhotoRGB, red, green, blue);
 
-/* impl ValidateColorComponentValue for ProPhotoRGB {
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        let mut is_valid = true;
-        is_valid &= validation::validate_range(ctx, path, "red", &self.red, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "green", &self.green, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "blue", &self.blue, 0.0, 1.0, true);
-        is_valid
-    }
-} */
-
 define_three_component_color_space!(Rec2020, red, green, blue);
-
-/* impl ValidateColorComponentValue for Rec2020 {
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        let mut is_valid = true;
-        is_valid &= validation::validate_range(ctx, path, "red", &self.red, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "green", &self.green, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "blue", &self.blue, 0.0, 1.0, true);
-        is_valid
-    }
-} */
 
 define_three_component_color_space!(XYZD50, x, y, z);
 
-/* impl ValidateColorComponentValue for XYZD50 {
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        let mut is_valid = true;
-        is_valid &= validation::validate_range(ctx, path, "x", &self.x, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "y", &self.y, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "z", &self.z, 0.0, 1.0, true);
-        is_valid
-    }
-} */
-
 define_three_component_color_space!(XYZD65, x, y, z);
 
-/* impl ValidateColorComponentValue for XYZD65 {
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        let mut is_valid = true;
-        is_valid &= validation::validate_range(ctx, path, "x", &self.x, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "y", &self.y, 0.0, 1.0, true);
-        is_valid &= validation::validate_range(ctx, path, "z", &self.z, 0.0, 1.0, true);
-        is_valid
-    }
-} */
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColorComponentArray([RefOr<ColorComponentElement<f64>>; 3]);
 
 /// The enum specifies all of the values the "components" key (which is the value of the color tokens) can be
+#[derive(Debug, Clone, PartialEq)]
 pub enum ColorComponentValue {
     SRGB(SRGB),
     /// sRGB Linear is a linearized version of the sRGB color space. It is used in some design tools to represent colors
@@ -622,39 +510,160 @@ pub enum ColorComponentValue {
     XYZD50(XYZD50),
 }
 
-/* impl ValidateColorComponentValue for ColorComponentValue {
-    fn validate(&self, ctx: &mut ParserContext, path: &str) -> bool {
-        match self {
-            ColorComponentValue::SRGB(srgb) => srgb.validate(ctx, path),
-            ColorComponentValue::SRGBLinear(srgb_linear) => srgb_linear.validate(ctx, path),
-            ColorComponentValue::HSL(hsl) => hsl.validate(ctx, path),
-            ColorComponentValue::HWB(hwb) => hwb.validate(ctx, path),
-            ColorComponentValue::CIELAB(cielab) => cielab.validate(ctx, path),
-            ColorComponentValue::LCH(lch) => lch.validate(ctx, path),
-            ColorComponentValue::OKLAB(oklab) => oklab.validate(ctx, path),
-            ColorComponentValue::OKLCH(oklch) => oklch.validate(ctx, path),
-            ColorComponentValue::DisplayP3(display_p3) => display_p3.validate(ctx, path),
-            ColorComponentValue::A98RGB(a98rgb) => a98rgb.validate(ctx, path),
-            ColorComponentValue::ProPhotoRGB(prophoto_rgb) => prophoto_rgb.validate(ctx, path),
-            ColorComponentValue::Rec2020(rec2020) => rec2020.validate(ctx, path),
-            ColorComponentValue::XYZD65(xyz_d65) => xyz_d65.validate(ctx, path),
-            ColorComponentValue::XYZD50(xyz_d50) => xyz_d50.validate(ctx, path),
+impl ColorComponentArray {
+    pub fn to_color_component_value(&self, color_space: &ColorSpace) -> ColorComponentValue {
+        match color_space {
+            ColorSpace::SRGB => ColorComponentValue::SRGB(SRGB::from(self.0.clone())),
+            ColorSpace::SRGBLinear => {
+                ColorComponentValue::SRGBLinear(SRGBLinear::from(self.0.clone()))
+            }
+            ColorSpace::HSL => ColorComponentValue::HSL(HSL::from(self.0.clone())),
+            ColorSpace::HWB => ColorComponentValue::HWB(HWB::from(self.0.clone())),
+            ColorSpace::CIELAB => ColorComponentValue::CIELAB(CIELAB::from(self.0.clone())),
+            ColorSpace::LCH => ColorComponentValue::LCH(LCH::from(self.0.clone())),
+            ColorSpace::OKLAB => ColorComponentValue::OKLAB(OKLAB::from(self.0.clone())),
+            ColorSpace::OKLCH => ColorComponentValue::OKLCH(OKLCH::from(self.0.clone())),
+            ColorSpace::DisplayP3 => {
+                ColorComponentValue::DisplayP3(DisplayP3::from(self.0.clone()))
+            }
+            ColorSpace::A98RGB => ColorComponentValue::A98RGB(A98RGB::from(self.0.clone())),
+            ColorSpace::ProPhotoRGB => {
+                ColorComponentValue::ProPhotoRGB(ProPhotoRGB::from(self.0.clone()))
+            }
+            ColorSpace::Rec2020 => ColorComponentValue::Rec2020(Rec2020::from(self.0.clone())),
+            ColorSpace::XYZD65 => ColorComponentValue::XYZD65(XYZD65::from(self.0.clone())),
+            ColorSpace::XYZD50 => ColorComponentValue::XYZD50(XYZD50::from(self.0.clone())),
         }
     }
-} */
+}
+
+impl<'a> TryFromJsonField<'a> for ColorComponentArray {
+    fn try_from_json_field(
+        ctx: &mut ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        match value {
+            serde_json::Value::Array(arr_val) => {
+                if arr_val.len() != COLOR_COMPONENT_ARRAY_LENGTH {
+                    ctx.push_to_errors(DiagnosticCode::InvalidTokenValue, format!(
+                        "Expected an array of length {} for color components, but got an array of length {}",
+                        COLOR_COMPONENT_ARRAY_LENGTH,
+                        arr_val.len()
+                    ), path.into());
+                    return None;
+                }
+
+                let mut components: [RefOr<ColorComponentElement<f64>>;
+                    COLOR_COMPONENT_ARRAY_LENGTH] =
+                    core::array::from_fn(|_| RefOr::Literal(ColorComponentElement::None));
+
+                for (index, component) in arr_val.iter().enumerate() {
+                    let parsed_val =
+                        parse_ref_or_value::<ColorComponentElement<f64>>(ctx, path, component);
+                    if let Some(val) = parsed_val {
+                        components[index] = val;
+                    } else {
+                        ctx.push_to_errors(DiagnosticCode::InvalidTokenValue, format!(
+                            "Expected a string with the value 'none', a number, or a reference for color components, but got a value of type {}",
+                            component
+                        ), path.into());
+                        return None;
+                    }
+                }
+
+                Some(ColorComponentArray(components))
+            }
+            _ => {
+                ctx.push_to_errors(DiagnosticCode::InvalidTokenValue, format!(
+                    "Expected an array of length {} for color components, but got a value of type {}",
+                    COLOR_COMPONENT_ARRAY_LENGTH,
+                    value
+                ), path.into());
+                None
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColorAlphaValue(Option<FloatOrInteger>);
+
+impl<'a> TryFromJsonField<'a> for ColorAlphaValue {
+    fn try_from_json_field(
+        ctx: &mut ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        match value {
+            serde_json::Value::Number(num_val) => {
+                if let Some(float_val) = num_val.as_f64() {
+                    Some(ColorAlphaValue(Some(FloatOrInteger::Float(float_val))))
+                } else if let Some(int_val) = num_val.as_i64() {
+                    Some(ColorAlphaValue(Some(FloatOrInteger::Integer(int_val))))
+                } else {
+                    ctx.push_to_errors(DiagnosticCode::InvalidTokenValue, format!(
+                        "Expected a number for alpha value, but got a number that cannot be represented as f64 or i64: {}",
+                        num_val
+                    ), path.into());
+                    None
+                }
+            }
+            serde_json::Value::Null => Some(ColorAlphaValue(None)),
+            _ => {
+                ctx.push_to_errors(
+                    DiagnosticCode::InvalidTokenValue,
+                    format!(
+                        "Expected a number or null for alpha value, but got a value of type {}",
+                        value
+                    ),
+                    path.into(),
+                );
+                None
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColorHexValue(HexColorTokenValue);
+
+impl<'a> TryFromJsonField<'a> for ColorHexValue {
+    fn try_from_json_field(
+        ctx: &mut ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        match value {
+            serde_json::Value::String(str_val) => Some(ColorHexValue(str_val.clone())),
+            _ => {
+                ctx.push_to_errors(
+                    DiagnosticCode::InvalidTokenValue,
+                    format!(
+                        "Expected a string for hex color token value, but got a value of type {}",
+                        value
+                    ),
+                    path.into(),
+                );
+                None
+            }
+        }
+    }
+}
 
 /// The ColorTokenValue struct represents the value of a color token, which includes the required color space and components of the color token,
 /// as well as the optional alpha and hex values of the color token.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ColorTokenValue {
     /// The color space of the color token, which determines how the components of the color token should be interpreted
     pub color_space: ColorSpace,
     /// The components of the color token, which are interpreted according to the color space of the color token
-    pub components: ColorComponentValue,
+    pub components: RefOr<ColorComponentArray>,
     /// The alpha component of the color token, which is a float between 0 and 1 representing the opacity of the color.
     /// If the alpha component is not specified, it is assumed to be 1 (fully opaque).
-    pub alpha: Option<f64>,
+    pub alpha: Option<RefOr<ColorAlphaValue>>,
     /// The hex value of the color token, which is a string representing the color in hexadecimal notation (e.g. "#RRGGBB").
-    pub hex: Option<HexColorTokenValue>,
+    pub hex: Option<ColorHexValue>,
 }
 
 impl<'a> TryFromJson<'a> for ColorTokenValue {
@@ -670,144 +679,46 @@ impl<'a> TryFromJson<'a> for ColorTokenValue {
         // - "hex": An optional string representing the color in hexadecimal notation (e.g. "#RRGGBB"). If the hex value is specified, it must be a valid hex color string and the color components of the color token must match the hex value of the color token
         match value {
             serde_json::Value::Object(map) => {
-                let raw_color_space = require_object_field(ctx, path, map, "colorSpace");
-                let raw_components = require_object_field(ctx, path, map, "components");
-                let raw_alpha = map.get("alpha");
-                let raw_hex = map.get("hex");
+                let color_space = parse_field_no_ref::<ColorSpace>(
+                    ctx,
+                    path,
+                    map,
+                    "colorSpace",
+                    FieldPresence::Required,
+                );
+                let color_components = parse_field::<ColorComponentArray>(
+                    ctx,
+                    path,
+                    map,
+                    "components",
+                    FieldPresence::Required,
+                );
+                let alpha = parse_field::<ColorAlphaValue>(
+                    ctx,
+                    path,
+                    map,
+                    "alpha",
+                    FieldPresence::Optional,
+                );
+                let hex = parse_field_no_ref::<ColorHexValue>(
+                    ctx,
+                    path,
+                    map,
+                    "hex",
+                    FieldPresence::Optional,
+                );
 
-                // Parse the color space of the color token, which is a required string that specifies the color space of the color components
-                // which is required to determine how the components of the color token should be interpreted
-                let parsed_color_space = raw_color_space.and_then(|raw| {
-                    require_enum_string_with_mapping(ctx, path, "colorSpace", raw, |s| {
-                        match s {
-                            "srgb" => Some(ColorSpace::SRGB),
-                            "srgb-linear" => Some(ColorSpace::SRGBLinear),
-                            "hsl" => Some(ColorSpace::HSL),
-                            "hwb" => Some(ColorSpace::HWB),
-                            "cielab" => Some(ColorSpace::CIELAB),
-                            "lch" => Some(ColorSpace::LCH),
-                            "oklab" => Some(ColorSpace::OKLAB),
-                            "oklch" => Some(ColorSpace::OKLCH),
-                            "display-p3" => Some(ColorSpace::DisplayP3),
-                            "a98-rgb" => Some(ColorSpace::A98RGB),
-                            "prophoto-rgb" => Some(ColorSpace::ProPhotoRGB),
-                            "rec2020" => Some(ColorSpace::Rec2020),
-                            "xyz-d65" => Some(ColorSpace::XYZD65),
-                            "xyz-d50" => Some(ColorSpace::XYZD50),
-                            _ => None,
-                        }
-                    }, "srgb, srgb-linear, hsl, hwb, cielab, lch, oklab, oklch, display-p3, a98-rgb, prophoto-rgb, rec2020, xyz-d65, xyz-d50")
-                });
-
-                // Parse the components of the color token. It is an array with a length of 3, and the interpretation of the components depends on the color space of the token
-                /* let parsed_components = raw_components.and_then(|raw| {
-                    require_array(ctx, path, raw)
-                        .and_then(|array| validation::validate_component_array(ctx, path, array))
-                        .and_then(|components| match parsed_color_space {
-                            Some(ColorSpace::SRGB) => {
-                                Some(ColorComponentValue::SRGB(SRGB::from(components)))
-                            }
-                            Some(ColorSpace::SRGBLinear) => Some(ColorComponentValue::SRGBLinear(
-                                SRGBLinear::from(components),
-                            )),
-                            Some(ColorSpace::HSL) => {
-                                Some(ColorComponentValue::HSL(HSL::from(components)))
-                            }
-                            Some(ColorSpace::HWB) => {
-                                Some(ColorComponentValue::HWB(HWB::from(components)))
-                            }
-                            Some(ColorSpace::CIELAB) => {
-                                Some(ColorComponentValue::CIELAB(CIELAB::from(components)))
-                            }
-                            Some(ColorSpace::LCH) => {
-                                Some(ColorComponentValue::LCH(LCH::from(components)))
-                            }
-                            Some(ColorSpace::OKLAB) => {
-                                Some(ColorComponentValue::OKLAB(OKLAB::from(components)))
-                            }
-                            Some(ColorSpace::OKLCH) => {
-                                Some(ColorComponentValue::OKLCH(OKLCH::from(components)))
-                            }
-                            Some(ColorSpace::DisplayP3) => {
-                                Some(ColorComponentValue::DisplayP3(DisplayP3::from(components)))
-                            }
-                            Some(ColorSpace::A98RGB) => {
-                                Some(ColorComponentValue::A98RGB(A98RGB::from(components)))
-                            }
-                            Some(ColorSpace::ProPhotoRGB) => Some(
-                                ColorComponentValue::ProPhotoRGB(ProPhotoRGB::from(components)),
-                            ),
-                            Some(ColorSpace::Rec2020) => {
-                                Some(ColorComponentValue::Rec2020(Rec2020::from(components)))
-                            }
-                            Some(ColorSpace::XYZD65) => {
-                                Some(ColorComponentValue::XYZD65(XYZD65::from(components)))
-                            }
-                            Some(ColorSpace::XYZD50) => {
-                                Some(ColorComponentValue::XYZD50(XYZD50::from(components)))
-                            }
-                            None => None,
-                        })
-                        .and_then(|converted_value| {
-                            if converted_value.validate(ctx, &path) {
-                                Some(converted_value)
-                            } else {
-                                None
-                            }
-                        })
-                }); */
-
-                // Parse the alpha component of the color token, which is an optional number between 0 and 1 representing the opacity of the color. If the alpha component is not specified, it is assumed to be 1 (fully opaque)
-                let parsed_alpha = raw_alpha.and_then(|raw| {
-                    require_number(ctx, path, raw).and_then(|num| {
-                        num.as_f64().and_then(|alpha| {
-                            if validation::validate_alpha(ctx, path, Some(alpha)) {
-                                Some(alpha)
-                            } else {
-                                // We won't error here as alpha is optional, but we will add a warning to the parser context if the alpha value is invalid
-                                // which is what is in this branch
-                                ctx.push_to_warnings(
-                                    DiagnosticCode::InvalidPropertyValue,
-                                    format!("Invalid alpha value: {}", alpha),
-                                    path.to_string(),
-                                );
-                                None
-                            }
-                        })
-                    })
-                });
-
-                // Parse the hex value of the color token, which is an optional string representing the color in hexadecimal notation (e.g. "#RRGGBB"). If the hex value is specified, it must be a valid hex color string and the color components of the color token must match the hex value of the color token
-                let parsed_hex = raw_hex.and_then(|raw| {
-                    require_string(ctx, path, raw).and_then(|s| {
-                        if validation::validate_hex_color_token_value(&String::from(s)) {
-                            Some(s.to_string())
-                        } else {
-                            // We won't error here as hex is optional, but we will add a warning to the parser context if the hex value is invalid
-                            // which is what is in this branch
-                            ctx.push_to_warnings(
-                                DiagnosticCode::InvalidPropertyValue,
-                                format!("Invalid hex value: {}", s),
-                                path.to_string(),
-                            );
-                            None
-                        }
-                    })
-                });
-
-                // Finally, construct the ColorTokenValue struct if the required color space and components were successfully parsed, otherwise return an error
-                match (parsed_color_space) {
-                    (Some(color_space)) =>
-                    /* ParseState::Parsed(Self {
+                match (color_space, color_components) {
+                    (Some(color_space), Some(color_components)) => ParseState::Parsed(Self {
                         color_space,
-                        components,
-                        alpha: parsed_alpha,
-                        hex: parsed_hex,
-                    }), */
-                    {
+                        components: color_components,
+                        alpha,
+                        hex,
+                    }),
+                    _ => {
+                        // If either the color space or the color components are missing or invalid, we cannot parse the color token value, so we return a fatal error
                         ParseState::Skipped
                     }
-                    _ => ParseState::Skipped,
                 }
             }
             _ => {
@@ -830,7 +741,12 @@ impl<'a> TryFromJson<'a> for ColorTokenValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FileFormat, errors::DiagnosticCode};
+    use crate::{
+        FileFormat,
+        errors::DiagnosticCode,
+        ir::{JsonPointer, JsonRef, RefOr},
+        token::utils::FloatOrInteger,
+    };
     use serde_json::json;
 
     fn make_context() -> ParserContext {
@@ -843,64 +759,37 @@ mod tests {
         (result, ctx)
     }
 
-    fn matches_color_space_and_components(value: &ColorTokenValue, color_space: &str) -> bool {
-        match color_space {
-            "srgb" => matches!(
-                (&value.color_space, &value.components),
-                (ColorSpace::SRGB, ColorComponentValue::SRGB(_))
-            ),
-            "srgb-linear" => matches!(
-                (&value.color_space, &value.components),
-                (ColorSpace::SRGBLinear, ColorComponentValue::SRGBLinear(_))
-            ),
-            "hsl" => matches!(
-                (&value.color_space, &value.components),
-                (ColorSpace::HSL, ColorComponentValue::HSL(_))
-            ),
-            "hwb" => matches!(
-                (&value.color_space, &value.components),
-                (ColorSpace::HWB, ColorComponentValue::HWB(_))
-            ),
-            "cielab" => matches!(
-                (&value.color_space, &value.components),
-                (ColorSpace::CIELAB, ColorComponentValue::CIELAB(_))
-            ),
-            "lch" => matches!(
-                (&value.color_space, &value.components),
-                (ColorSpace::LCH, ColorComponentValue::LCH(_))
-            ),
-            "oklab" => matches!(
-                (&value.color_space, &value.components),
-                (ColorSpace::OKLAB, ColorComponentValue::OKLAB(_))
-            ),
-            "oklch" => matches!(
-                (&value.color_space, &value.components),
-                (ColorSpace::OKLCH, ColorComponentValue::OKLCH(_))
-            ),
-            "display-p3" => matches!(
-                (&value.color_space, &value.components),
-                (ColorSpace::DisplayP3, ColorComponentValue::DisplayP3(_))
-            ),
-            "a98-rgb" => matches!(
-                (&value.color_space, &value.components),
-                (ColorSpace::A98RGB, ColorComponentValue::A98RGB(_))
-            ),
-            "prophoto-rgb" => matches!(
-                (&value.color_space, &value.components),
-                (ColorSpace::ProPhotoRGB, ColorComponentValue::ProPhotoRGB(_))
-            ),
-            "rec2020" => matches!(
-                (&value.color_space, &value.components),
-                (ColorSpace::Rec2020, ColorComponentValue::Rec2020(_))
-            ),
-            "xyz-d65" => matches!(
-                (&value.color_space, &value.components),
-                (ColorSpace::XYZD65, ColorComponentValue::XYZD65(_))
-            ),
-            "xyz-d50" => matches!(
-                (&value.color_space, &value.components),
-                (ColorSpace::XYZD50, ColorComponentValue::XYZD50(_))
-            ),
+    fn expect_parsed(result: ParseState<ColorTokenValue>) -> ColorTokenValue {
+        let ParseState::Parsed(parsed) = result else {
+            panic!("expected color token to parse successfully");
+        };
+
+        parsed
+    }
+
+    fn matches_color_space_and_components(value: &ColorTokenValue) -> bool {
+        let RefOr::Literal(components) = &value.components else {
+            return false;
+        };
+
+        match (
+            &value.color_space,
+            components.to_color_component_value(&value.color_space),
+        ) {
+            (ColorSpace::SRGB, ColorComponentValue::SRGB(_)) => true,
+            (ColorSpace::SRGBLinear, ColorComponentValue::SRGBLinear(_)) => true,
+            (ColorSpace::HSL, ColorComponentValue::HSL(_)) => true,
+            (ColorSpace::HWB, ColorComponentValue::HWB(_)) => true,
+            (ColorSpace::CIELAB, ColorComponentValue::CIELAB(_)) => true,
+            (ColorSpace::LCH, ColorComponentValue::LCH(_)) => true,
+            (ColorSpace::OKLAB, ColorComponentValue::OKLAB(_)) => true,
+            (ColorSpace::OKLCH, ColorComponentValue::OKLCH(_)) => true,
+            (ColorSpace::DisplayP3, ColorComponentValue::DisplayP3(_)) => true,
+            (ColorSpace::A98RGB, ColorComponentValue::A98RGB(_)) => true,
+            (ColorSpace::ProPhotoRGB, ColorComponentValue::ProPhotoRGB(_)) => true,
+            (ColorSpace::Rec2020, ColorComponentValue::Rec2020(_)) => true,
+            (ColorSpace::XYZD65, ColorComponentValue::XYZD65(_)) => true,
+            (ColorSpace::XYZD50, ColorComponentValue::XYZD50(_)) => true,
             _ => false,
         }
     }
@@ -918,14 +807,24 @@ mod tests {
 
         assert!(ctx.errors.is_empty());
 
-        let ParseState::Parsed(parsed) = result else {
-            panic!("expected color token to parse successfully");
-        };
+        let parsed = expect_parsed(result);
 
         assert!(matches!(parsed.color_space, ColorSpace::SRGB));
-        assert!(matches!(parsed.components, ColorComponentValue::SRGB(_)));
-        assert_eq!(parsed.alpha, Some(0.4));
-        assert_eq!(parsed.hex.as_deref(), Some("#abc"));
+        assert_eq!(
+            parsed.components,
+            RefOr::Literal(ColorComponentArray([
+                RefOr::Literal(ColorComponentElement::Value(0.25)),
+                RefOr::Literal(ColorComponentElement::Value(0.5)),
+                RefOr::Literal(ColorComponentElement::Value(0.75)),
+            ]))
+        );
+        assert_eq!(
+            parsed.alpha,
+            Some(RefOr::Literal(ColorAlphaValue(Some(
+                FloatOrInteger::Float(0.4,)
+            ))))
+        );
+        assert_eq!(parsed.hex, Some(ColorHexValue("#abc".to_string())));
     }
 
     #[test]
@@ -939,43 +838,81 @@ mod tests {
 
         assert!(ctx.errors.is_empty());
 
-        let ParseState::Parsed(parsed) = result else {
-            panic!("expected color token to parse successfully");
-        };
+        let parsed = expect_parsed(result);
 
-        /* assert!(matches!(parsed.color_space, ColorSpace::LCH));
-        match parsed.components {
-            ColorComponentValue::LCH(lch) => {
-                assert!(matches!(lch.lightness, ColorComponentElement::Value(50.0)));
-                assert!(matches!(lch.chroma, ColorComponentElement::None));
-                assert!(matches!(lch.hue, ColorComponentElement::Value(180.0)));
-            }
-            _ => panic!("expected LCH color components"),
-        } */
+        assert_eq!(parsed.color_space, ColorSpace::LCH);
+        assert_eq!(
+            parsed.components,
+            RefOr::Literal(ColorComponentArray([
+                RefOr::Literal(ColorComponentElement::Value(50.0)),
+                RefOr::Literal(ColorComponentElement::None),
+                RefOr::Literal(ColorComponentElement::Value(180.0)),
+            ]))
+        );
+    }
+
+    #[test]
+    fn parses_components_and_alpha_as_references() {
+        let value = json!({
+            "colorSpace": "srgb",
+            "components": { "$ref": "#/tokens/colors/base/components" },
+            "alpha": { "$ref": "" }
+        });
+
+        let (result, ctx) = parse_color(&value);
+
+        assert!(ctx.errors.is_empty());
+
+        let parsed = expect_parsed(result);
+
+        assert_eq!(parsed.color_space, ColorSpace::SRGB);
+        assert_eq!(
+            parsed.components,
+            RefOr::Ref(JsonRef::new_local_pointer(
+                "#/tokens/colors/base/components".to_string(),
+                JsonPointer::from("#/tokens/colors/base/components"),
+            ))
+        );
+        assert_eq!(
+            parsed.alpha,
+            Some(RefOr::Ref(JsonRef::new_local_pointer(
+                String::new(),
+                JsonPointer::new(),
+            )))
+        );
+        assert_eq!(parsed.hex, None);
     }
 
     #[test]
     fn parses_all_supported_color_spaces_with_valid_components() {
         let cases = [
-            ("srgb", json!([0.0, 1.0, 0.5])),
-            ("srgb-linear", json!([0.0, 1.0, 0.5])),
-            ("hsl", json!([359.0, 0.0, 100.0])),
-            ("hwb", json!([0.0, 0.0, 100.0])),
-            ("cielab", json!([0.0, -50.0, 50.0])),
-            ("lch", json!([100.0, 0.0, 359.0])),
-            ("oklab", json!([50.0, -0.5, 0.5])),
-            ("oklch", json!([100.0, 0.0, 359.0])),
-            ("display-p3", json!([0.0, 1.0, 0.5])),
-            ("a98-rgb", json!([0.0, 1.0, 0.5])),
-            ("prophoto-rgb", json!([0.0, 1.0, 0.5])),
-            ("rec2020", json!([0.0, 1.0, 0.5])),
-            ("xyz-d65", json!([0.0, 1.0, 0.5])),
-            ("xyz-d50", json!([0.0, 1.0, 0.5])),
+            ("srgb", ColorSpace::SRGB, json!([0.0, 1.0, 0.5])),
+            (
+                "srgb-linear",
+                ColorSpace::SRGBLinear,
+                json!([0.0, 1.0, 0.5]),
+            ),
+            ("hsl", ColorSpace::HSL, json!([359.0, 0.0, 100.0])),
+            ("hwb", ColorSpace::HWB, json!([0.0, 0.0, 100.0])),
+            ("cielab", ColorSpace::CIELAB, json!([0.0, -50.0, 50.0])),
+            ("lch", ColorSpace::LCH, json!([100.0, 0.0, 359.0])),
+            ("oklab", ColorSpace::OKLAB, json!([50.0, -0.5, 0.5])),
+            ("oklch", ColorSpace::OKLCH, json!([100.0, 0.0, 359.0])),
+            ("display-p3", ColorSpace::DisplayP3, json!([0.0, 1.0, 0.5])),
+            ("a98rgb", ColorSpace::A98RGB, json!([0.0, 1.0, 0.5])),
+            (
+                "prophoto-rgb",
+                ColorSpace::ProPhotoRGB,
+                json!([0.0, 1.0, 0.5]),
+            ),
+            ("rec2020", ColorSpace::Rec2020, json!([0.0, 1.0, 0.5])),
+            ("xyz-d65", ColorSpace::XYZD65, json!([0.0, 1.0, 0.5])),
+            ("xyz-d50", ColorSpace::XYZD50, json!([0.0, 1.0, 0.5])),
         ];
 
-        for (color_space, components) in cases {
+        for (color_space_name, expected_color_space, components) in cases {
             let value = json!({
-                "colorSpace": color_space,
+                "colorSpace": color_space_name,
                 "components": components
             });
 
@@ -983,16 +920,15 @@ mod tests {
 
             assert!(
                 ctx.errors.is_empty(),
-                "unexpected diagnostics for {color_space}"
+                "unexpected diagnostics for {color_space_name}"
             );
 
-            let ParseState::Parsed(parsed) = result else {
-                panic!("expected {color_space} color token to parse successfully");
-            };
+            let parsed = expect_parsed(result);
 
+            assert_eq!(parsed.color_space, expected_color_space);
             assert!(
-                matches_color_space_and_components(&parsed, color_space),
-                "expected color space and components to match for {color_space}"
+                matches_color_space_and_components(&parsed),
+                "expected color space and components to match for {color_space_name}"
             );
         }
     }
@@ -1025,8 +961,9 @@ mod tests {
         assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidEnumValue);
         assert_eq!(
             ctx.errors[0].message,
-            "Expected one of srgb, srgb-linear, hsl, hwb, cielab, lch, oklab, oklch, display-p3, a98-rgb, prophoto-rgb, rec2020, xyz-d65, xyz-d50 for the field 'colorSpace', but got 'ansi-rgb'"
+            "Expected one of srgb, srgb-linear, hsl, hwb, cielab, lch, oklab, oklch, display-p3, a98rgb, prophoto-rgb, rec2020, xyz-d65, xyz-d50 for the field 'colorSpace', but got 'ansi-rgb'"
         );
+        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
     }
 
     #[test]
@@ -1040,8 +977,12 @@ mod tests {
 
         assert!(matches!(result, ParseState::Skipped));
         assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
-        assert_eq!(ctx.errors[0].message, "Expected an array, but found: true");
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(
+            ctx.errors[0].message,
+            "Expected an array of length 3 for color components, but got a value of type true"
+        );
+        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
     }
 
     #[test]
@@ -1060,10 +1001,11 @@ mod tests {
             ctx.errors[0].message,
             "Expected an array of length 3 for color components, but got an array of length 2"
         );
+        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
     }
 
     #[test]
-    fn skips_when_component_keyword_is_not_none() {
+    fn skips_when_component_keyword_is_not_none_and_reports_follow_up_error() {
         let value = json!({
             "colorSpace": "srgb",
             "components": [0.1, "invalid", 0.3]
@@ -1072,34 +1014,48 @@ mod tests {
         let (result, ctx) = parse_color(&value);
 
         assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors.len(), 2);
         assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
         assert_eq!(
             ctx.errors[0].message,
             "Expected a string with the value 'none' or a number for color components, but got a string with the value 'invalid'"
         );
+        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
+        assert_eq!(ctx.errors[1].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(
+            ctx.errors[1].message,
+            "Expected a string with the value 'none', a number, or a reference for color components, but got a value of type \"invalid\""
+        );
+        assert_eq!(ctx.errors[1].path, "tokens.colors.primary");
     }
 
     #[test]
-    fn skips_when_component_values_fail_color_space_validation() {
+    fn skips_when_component_reference_is_invalid_and_reports_follow_up_error() {
         let value = json!({
-            "colorSpace": "hsl",
-            "components": [360.0, 50.0, 50.0]
+            "colorSpace": "srgb",
+            "components": [0.1, { "$ref": "tokens/colors/base/components/1" }, 0.3]
         });
 
         let (result, ctx) = parse_color(&value);
 
         assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors.len(), 2);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidReference);
         assert_eq!(
             ctx.errors[0].message,
-            "Invalid color component value at path 'tokens.colors.primary.hue': Value must be between 0 and 360 (exclusive)"
+            "Invalid JSON pointer: tokens/colors/base/components/1"
         );
+        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
+        assert_eq!(ctx.errors[1].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(
+            ctx.errors[1].message,
+            "Expected a string with the value 'none', a number, or a reference for color components, but got a value of type {\"$ref\":\"tokens/colors/base/components/1\"}"
+        );
+        assert_eq!(ctx.errors[1].path, "tokens.colors.primary");
     }
 
     #[test]
-    fn keeps_parsing_when_alpha_is_invalid_but_records_diagnostic() {
+    fn keeps_parsing_when_alpha_is_out_of_range_because_no_validation_runs() {
         let value = json!({
             "colorSpace": "srgb",
             "components": [0.1, 0.2, 0.3],
@@ -1107,17 +1063,14 @@ mod tests {
         });
 
         let (result, ctx) = parse_color(&value);
+        let parsed = expect_parsed(result);
 
-        let ParseState::Parsed(parsed) = result else {
-            panic!("expected color token to parse despite invalid alpha");
-        };
-
-        assert_eq!(parsed.alpha, None);
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert!(ctx.errors.is_empty());
         assert_eq!(
-            ctx.errors[0].message,
-            "Invalid color component value at path 'tokens.colors.primary.alpha': Alpha value must be between 0 and 1 (inclusive)"
+            parsed.alpha,
+            Some(RefOr::Literal(ColorAlphaValue(Some(
+                FloatOrInteger::Float(1.5,)
+            ))))
         );
     }
 
@@ -1131,94 +1084,54 @@ mod tests {
 
         let (result, ctx) = parse_color(&value);
 
-        let ParseState::Parsed(parsed) = result else {
-            panic!("expected color token to parse despite invalid alpha type");
-        };
+        let parsed = expect_parsed(result);
 
         assert_eq!(parsed.alpha, None);
         assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
         assert_eq!(
             ctx.errors[0].message,
-            "Expected a number, but found: \"opaque\""
+            "Expected a number or null for alpha value, but got a value of type \"opaque\""
         );
+        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
     }
 
     #[test]
-    fn keeps_parsing_when_hex_is_invalid_or_wrong_type() {
-        let invalid_hex_value = json!({
+    fn keeps_parsing_when_hex_contents_are_not_validated() {
+        let value = json!({
             "colorSpace": "srgb",
             "components": [0.1, 0.2, 0.3],
             "hex": "#12"
         });
 
-        let (invalid_hex_result, invalid_hex_ctx) = parse_color(&invalid_hex_value);
+        let (result, ctx) = parse_color(&value);
 
-        let ParseState::Parsed(parsed_invalid_hex) = invalid_hex_result else {
-            panic!("expected color token to parse despite invalid hex contents");
-        };
+        let parsed = expect_parsed(result);
 
-        assert_eq!(parsed_invalid_hex.hex, None);
-        assert!(invalid_hex_ctx.errors.is_empty());
+        assert!(ctx.errors.is_empty());
+        assert_eq!(parsed.hex, Some(ColorHexValue("#12".to_string())));
+    }
 
-        let wrong_type_hex_value = json!({
+    #[test]
+    fn keeps_parsing_when_hex_has_wrong_json_type() {
+        let value = json!({
             "colorSpace": "srgb",
             "components": [0.1, 0.2, 0.3],
             "hex": false
         });
 
-        let (wrong_type_result, wrong_type_ctx) = parse_color(&wrong_type_hex_value);
-
-        let ParseState::Parsed(parsed_wrong_type_hex) = wrong_type_result else {
-            panic!("expected color token to parse despite invalid hex type");
-        };
-
-        assert_eq!(parsed_wrong_type_hex.hex, None);
-        assert_eq!(wrong_type_ctx.errors.len(), 1);
-        assert_eq!(
-            wrong_type_ctx.errors[0].code,
-            DiagnosticCode::InvalidPropertyType
-        );
-        assert_eq!(
-            wrong_type_ctx.errors[0].message,
-            "Expected a string, but found: false"
-        );
-    }
-
-    #[test]
-    fn skips_when_lch_chroma_is_negative() {
-        let value = json!({
-            "colorSpace": "lch",
-            "components": [50.0, -1.0, 180.0]
-        });
-
         let (result, ctx) = parse_color(&value);
 
-        assert!(matches!(result, ParseState::Skipped));
+        let parsed = expect_parsed(result);
+
+        assert_eq!(parsed.hex, None);
         assert_eq!(ctx.errors.len(), 1);
         assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
         assert_eq!(
             ctx.errors[0].message,
-            "Invalid color component value at path 'tokens.colors.primary.chroma': Value must be non-negative"
+            "Expected a string for hex color token value, but got a value of type false"
         );
-    }
-
-    #[test]
-    fn skips_when_xyz_component_exceeds_maximum() {
-        let value = json!({
-            "colorSpace": "xyz-d65",
-            "components": [0.1, 1.1, 0.3]
-        });
-
-        let (result, ctx) = parse_color(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Invalid color component value at path 'tokens.colors.primary.y': Value must be between 0 and 1 (inclusive)"
-        );
+        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
     }
 
     #[test]
@@ -1234,6 +1147,7 @@ mod tests {
             ctx.errors[0].message,
             "Expected an object for color token value, but found \"#ff0099\""
         );
+        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
     }
 
     #[test]
