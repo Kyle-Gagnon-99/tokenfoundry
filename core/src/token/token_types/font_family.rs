@@ -1,32 +1,58 @@
 //! The `font_family` module defines the data structures for font family tokens defined in the DTCG specification,
 //! which represents a font family in the UI, such as the name of the font and its fallback fonts.
 
-use crate::{
-    ir::{RefOr, parse_ref_or_value},
-    token::{ParseState, TryFromJson, TryFromJsonField},
-};
+use crate::ir::{RefOr, TryFromJson, parse_ref_or_value};
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum FontFamilyValue {
-    Single(RefOr<String>),
-    Multiple(Vec<RefOr<String>>),
-}
+pub struct FontFamilySingleValue(pub String);
 
-impl<'a> TryFromJsonField<'a> for FontFamilyValue {
-    fn try_from_json_field(
+impl<'a> TryFromJson<'a> for FontFamilySingleValue {
+    fn try_from_json(
         ctx: &mut crate::ParserContext,
         path: &str,
         value: &'a serde_json::Value,
     ) -> Option<Self> {
         match value {
-            serde_json::Value::String(str_val) => {
-                Some(FontFamilyValue::Single(RefOr::Literal(str_val.clone())))
+            serde_json::Value::String(str_val) => Some(FontFamilySingleValue(str_val.clone())),
+            _ => {
+                ctx.push_to_errors(
+                    crate::errors::DiagnosticCode::InvalidTokenValue,
+                    format!(
+                        "Expected font family token value to be a string, but found {}",
+                        value
+                    ),
+                    path.into(),
+                );
+                None
             }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FontFamilyValue {
+    Single(RefOr<FontFamilySingleValue>),
+    Multiple(Vec<RefOr<FontFamilySingleValue>>),
+}
+
+impl<'a> TryFromJson<'a> for FontFamilyValue {
+    fn try_from_json(
+        ctx: &mut crate::ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        match value {
+            serde_json::Value::String(str_val) => Some(FontFamilyValue::Single(RefOr::Literal(
+                FontFamilySingleValue(str_val.clone()),
+            ))),
             serde_json::Value::Array(arr_val) => {
                 let mut font_families = Vec::new();
                 for (index, item) in arr_val.iter().enumerate() {
-                    let val =
-                        parse_ref_or_value::<String>(ctx, &format!("{}.{}", path, index), item);
+                    let val = parse_ref_or_value::<FontFamilySingleValue>(
+                        ctx,
+                        &format!("{}/{}", path, index),
+                        item,
+                    );
                     if let Some(v) = val {
                         font_families.push(v);
                     } else {
@@ -60,11 +86,8 @@ impl<'a> TryFromJson<'a> for FontFamilyTokenValue {
         ctx: &mut crate::ParserContext,
         path: &str,
         value: &'a serde_json::Value,
-    ) -> ParseState<Self> {
-        match parse_ref_or_value::<FontFamilyValue>(ctx, path, value).map(FontFamilyTokenValue) {
-            Some(parsed) => ParseState::Parsed(parsed),
-            None => ParseState::Skipped, // The error has already been pushed by parse_ref_or_value, so we just return Skipped here
-        }
+    ) -> Option<Self> {
+        parse_ref_or_value(ctx, path, value).map(FontFamilyTokenValue)
     }
 }
 
@@ -74,286 +97,190 @@ mod tests {
     use crate::{
         FileFormat, ParserContext,
         errors::DiagnosticCode,
-        ir::{JsonPointer, JsonRef},
+        ir::{RefOr, TryFromJson},
     };
     use serde_json::json;
 
-    fn make_context() -> ParserContext {
-        ParserContext::new(String::from("test.json"), FileFormat::Json, String::new())
-    }
-
-    fn parse_font_family(
-        value: &serde_json::Value,
-    ) -> (ParseState<FontFamilyTokenValue>, ParserContext) {
-        let mut ctx = make_context();
-        let result = FontFamilyTokenValue::try_from_json(
-            &mut ctx,
-            "tokens.typography.body.fontFamily",
-            value,
-        );
-        (result, ctx)
-    }
-
-    fn expect_parsed(result: ParseState<FontFamilyTokenValue>) -> RefOr<FontFamilyValue> {
-        let ParseState::Parsed(FontFamilyTokenValue(parsed)) = result else {
-            panic!("expected a parsed font family token");
-        };
-
-        parsed
+    fn parser_context() -> ParserContext {
+        ParserContext::new("tests.json".into(), FileFormat::Json, String::new())
     }
 
     #[test]
     fn parses_single_font_family_string() {
-        let value = json!("Inter");
+        let mut ctx = parser_context();
 
-        let (result, ctx) = parse_font_family(&value);
+        let parsed = FontFamilySingleValue::try_from_json(&mut ctx, "/token", &json!("Inter"));
 
+        assert_eq!(parsed, Some(FontFamilySingleValue("Inter".into())));
         assert!(ctx.errors.is_empty());
-
-        match expect_parsed(result) {
-            RefOr::Literal(FontFamilyValue::Single(name)) => {
-                assert_eq!(name, RefOr::Literal("Inter".to_string()))
-            }
-            RefOr::Literal(FontFamilyValue::Multiple(_)) => {
-                panic!("expected a single font family value")
-            }
-            RefOr::Ref(_) => panic!("expected a literal font family value"),
-        }
     }
 
     #[test]
-    fn parses_multiple_font_families_array() {
-        let value = json!(["Inter", "Helvetica", "sans-serif"]);
+    fn rejects_non_string_single_font_family_value() {
+        let mut ctx = parser_context();
 
-        let (result, ctx) = parse_font_family(&value);
+        let parsed = FontFamilySingleValue::try_from_json(&mut ctx, "/token", &json!(16));
 
-        assert!(ctx.errors.is_empty());
-
-        match expect_parsed(result) {
-            RefOr::Literal(FontFamilyValue::Multiple(families)) => {
-                assert_eq!(
-                    families,
-                    vec![
-                        RefOr::Literal("Inter".to_string()),
-                        RefOr::Literal("Helvetica".to_string()),
-                        RefOr::Literal("sans-serif".to_string())
-                    ]
-                );
-            }
-            RefOr::Literal(FontFamilyValue::Single(_)) => {
-                panic!("expected multiple font family values")
-            }
-            RefOr::Ref(_) => panic!("expected a literal font family value"),
-        }
-    }
-
-    #[test]
-    fn parses_empty_font_family_array() {
-        let value = json!([]);
-
-        let (result, ctx) = parse_font_family(&value);
-
-        assert!(ctx.errors.is_empty());
-
-        match expect_parsed(result) {
-            RefOr::Literal(FontFamilyValue::Multiple(families)) => assert!(families.is_empty()),
-            RefOr::Literal(FontFamilyValue::Single(_)) => {
-                panic!("expected multiple font family values")
-            }
-            RefOr::Ref(_) => panic!("expected a literal font family value"),
-        }
-    }
-
-    #[test]
-    fn parses_array_with_literal_and_ref_values() {
-        let value = json!([
-            "Inter",
-            { "$ref": "#/tokens/typography/brand/fontFamily" },
-            { "$ref": "" }
-        ]);
-
-        let (result, ctx) = parse_font_family(&value);
-
-        assert!(ctx.errors.is_empty());
-
-        match expect_parsed(result) {
-            RefOr::Literal(FontFamilyValue::Multiple(families)) => {
-                assert_eq!(families.len(), 3);
-                assert_eq!(families[0], RefOr::Literal("Inter".to_string()));
-                assert_eq!(
-                    families[1],
-                    RefOr::Ref(JsonRef::new_local_pointer(
-                        "#/tokens/typography/brand/fontFamily".to_string(),
-                        JsonPointer::from("#/tokens/typography/brand/fontFamily"),
-                    ))
-                );
-                assert_eq!(
-                    families[2],
-                    RefOr::Ref(JsonRef::new_local_pointer(
-                        String::new(),
-                        JsonPointer::new(),
-                    ))
-                );
-            }
-            RefOr::Literal(FontFamilyValue::Single(_)) => {
-                panic!("expected multiple font family values")
-            }
-            RefOr::Ref(_) => panic!("expected a literal font family value"),
-        }
-    }
-
-    #[test]
-    fn skips_when_array_contains_invalid_ref_pointer() {
-        let value = json!(["Inter", { "$ref": "tokens/typography/body/fontFamily" }]);
-
-        let (result, ctx) = parse_font_family(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidReference);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Invalid JSON pointer: tokens/typography/body/fontFamily"
-        );
-        assert_eq!(ctx.errors[0].path, "tokens.typography.body.fontFamily.1");
-    }
-
-    #[test]
-    fn parses_top_level_ref_object() {
-        let value = json!({ "$ref": "#/tokens/typography/brand/fontFamily" });
-
-        let (result, ctx) = parse_font_family(&value);
-
-        assert!(ctx.errors.is_empty());
-        assert_eq!(
-            expect_parsed(result),
-            RefOr::Ref(JsonRef::new_local_pointer(
-                "#/tokens/typography/brand/fontFamily".to_string(),
-                JsonPointer::from("#/tokens/typography/brand/fontFamily"),
-            ))
-        );
-    }
-
-    #[test]
-    fn parses_top_level_empty_string_ref_object() {
-        let value = json!({ "$ref": "" });
-
-        let (result, ctx) = parse_font_family(&value);
-
-        assert!(ctx.errors.is_empty());
-        assert_eq!(
-            expect_parsed(result),
-            RefOr::Ref(JsonRef::new_local_pointer(
-                String::new(),
-                JsonPointer::new(),
-            ))
-        );
-    }
-
-    #[test]
-    fn skips_when_top_level_ref_pointer_is_invalid() {
-        let value = json!({ "$ref": "tokens/typography/body/fontFamily" });
-
-        let (result, ctx) = parse_font_family(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidReference);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Invalid JSON pointer: tokens/typography/body/fontFamily"
-        );
-        assert_eq!(ctx.errors[0].path, "tokens.typography.body.fontFamily");
-    }
-
-    #[test]
-    fn skips_when_top_level_object_has_ref_and_extra_properties() {
-        let value = json!({
-            "$ref": "#/tokens/typography/brand/fontFamily",
-            "fallback": "sans-serif"
-        });
-
-        let (result, ctx) = parse_font_family(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
+        assert_eq!(parsed, None);
         assert_eq!(ctx.errors.len(), 1);
         assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Expected font family token value to be either a string or an array of strings, but found {\"$ref\":\"#/tokens/typography/brand/fontFamily\",\"fallback\":\"sans-serif\"}"
-        );
-        assert_eq!(ctx.errors[0].path, "tokens.typography.body.fontFamily");
+        assert_eq!(ctx.errors[0].path, "/token");
     }
 
     #[test]
-    fn skips_when_array_item_has_ref_and_extra_properties() {
+    fn parses_font_family_value_from_single_string() {
+        let mut ctx = parser_context();
+
+        let parsed = FontFamilyValue::try_from_json(&mut ctx, "/token", &json!("Inter"));
+
+        assert_eq!(
+            parsed,
+            Some(FontFamilyValue::Single(RefOr::Literal(
+                FontFamilySingleValue("Inter".into())
+            )))
+        );
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn parses_font_family_value_from_empty_array() {
+        let mut ctx = parser_context();
+
+        let parsed = FontFamilyValue::try_from_json(&mut ctx, "/token", &json!([]));
+
+        assert_eq!(parsed, Some(FontFamilyValue::Multiple(Vec::new())));
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn parses_font_family_value_from_string_array_and_references() {
+        let mut ctx = parser_context();
         let value = json!([
-            {
-                "$ref": "#/tokens/typography/brand/fontFamily",
-                "fallback": "sans-serif"
-            }
+            "Inter",
+            { "$ref": "#/fonts/fallback" },
+            "sans-serif"
         ]);
 
-        let (result, ctx) = parse_font_family(&value);
+        let parsed = FontFamilyValue::try_from_json(&mut ctx, "/token", &value);
 
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
         assert_eq!(
-            ctx.errors[0].message,
-            "Expected a string, but found: {\"$ref\":\"#/tokens/typography/brand/fontFamily\",\"fallback\":\"sans-serif\"}"
+            parsed,
+            Some(FontFamilyValue::Multiple(vec![
+                RefOr::Literal(FontFamilySingleValue("Inter".into())),
+                RefOr::from_ref(crate::ir::JsonRef::new_local_pointer(
+                    "#/fonts/fallback".into(),
+                    crate::ir::JsonPointer::from("#/fonts/fallback"),
+                )),
+                RefOr::Literal(FontFamilySingleValue("sans-serif".into())),
+            ]))
         );
-        assert_eq!(ctx.errors[0].path, "tokens.typography.body.fontFamily.0");
+        assert!(ctx.errors.is_empty());
     }
 
     #[test]
-    fn skips_when_array_contains_non_string_item() {
+    fn rejects_font_family_value_with_invalid_top_level_type() {
+        let mut ctx = parser_context();
+
+        let parsed = FontFamilyValue::try_from_json(&mut ctx, "/token", &json!(true));
+
+        assert_eq!(parsed, None);
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors[0].path, "/token");
+    }
+
+    #[test]
+    fn rejects_font_family_array_when_item_has_invalid_type() {
+        let mut ctx = parser_context();
         let value = json!(["Inter", 42, "sans-serif"]);
 
-        let (result, ctx) = parse_font_family(&value);
+        let parsed = FontFamilyValue::try_from_json(&mut ctx, "/token", &value);
 
-        assert!(matches!(result, ParseState::Skipped));
+        assert_eq!(parsed, None);
         assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
-        assert_eq!(ctx.errors[0].message, "Expected a string, but found: 42");
-        assert_eq!(ctx.errors[0].path, "tokens.typography.body.fontFamily.1");
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors[0].path, "/token/1");
     }
 
     #[test]
-    fn stops_at_first_invalid_array_item() {
-        let value = json!([true, 42]);
+    fn rejects_font_family_array_when_reference_is_invalid() {
+        let mut ctx = parser_context();
+        let value = json!([
+            "Inter",
+            { "$ref": "not-a-pointer" }
+        ]);
 
-        let (result, ctx) = parse_font_family(&value);
+        let parsed = FontFamilyValue::try_from_json(&mut ctx, "/token", &value);
 
-        assert!(matches!(result, ParseState::Skipped));
+        assert_eq!(parsed, None);
         assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].message, "Expected a string, but found: true");
-        assert_eq!(ctx.errors[0].path, "tokens.typography.body.fontFamily.0");
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidReference);
+        assert_eq!(ctx.errors[0].path, "/token/1");
     }
 
     #[test]
-    fn skips_for_invalid_non_string_non_array_values() {
-        let cases = [
-            json!(42),
-            json!(true),
-            json!(null),
-            json!({"primary": "Inter"}),
-        ];
+    fn parses_font_family_token_value_as_literal_string() {
+        let mut ctx = parser_context();
 
-        for value in cases {
-            let (result, ctx) = parse_font_family(&value);
+        let parsed = FontFamilyTokenValue::try_from_json(&mut ctx, "/token", &json!("Inter"));
 
-            assert!(matches!(result, ParseState::Skipped));
-            assert_eq!(ctx.errors.len(), 1);
-            assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
-            assert_eq!(ctx.errors[0].path, "tokens.typography.body.fontFamily");
-            assert_eq!(
-                ctx.errors[0].message,
-                format!(
-                    "Expected font family token value to be either a string or an array of strings, but found {}",
-                    value
-                )
-            );
-        }
+        assert_eq!(
+            parsed,
+            Some(FontFamilyTokenValue(RefOr::Literal(
+                FontFamilyValue::Single(RefOr::Literal(FontFamilySingleValue("Inter".into())),)
+            )))
+        );
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn parses_font_family_token_value_as_top_level_reference() {
+        let mut ctx = parser_context();
+
+        let parsed = FontFamilyTokenValue::try_from_json(
+            &mut ctx,
+            "/token",
+            &json!({ "$ref": "#/fonts/body" }),
+        );
+
+        assert_eq!(
+            parsed,
+            Some(FontFamilyTokenValue(RefOr::from_ref(
+                crate::ir::JsonRef::new_local_pointer(
+                    "#/fonts/body".into(),
+                    crate::ir::JsonPointer::from("#/fonts/body"),
+                ),
+            )))
+        );
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn rejects_font_family_token_value_with_invalid_top_level_reference() {
+        let mut ctx = parser_context();
+
+        let parsed = FontFamilyTokenValue::try_from_json(
+            &mut ctx,
+            "/token",
+            &json!({ "$ref": "not-a-pointer" }),
+        );
+
+        assert_eq!(parsed, None);
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidReference);
+        assert_eq!(ctx.errors[0].path, "/token");
+    }
+
+    #[test]
+    fn rejects_font_family_token_value_with_invalid_object_shape() {
+        let mut ctx = parser_context();
+
+        let parsed =
+            FontFamilyTokenValue::try_from_json(&mut ctx, "/token", &json!({ "primary": "Inter" }));
+
+        assert_eq!(parsed, None);
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors[0].path, "/token");
     }
 }

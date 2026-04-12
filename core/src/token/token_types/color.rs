@@ -5,13 +5,9 @@ use std::f64;
 use crate::{
     ParserContext,
     errors::DiagnosticCode,
-    ir::{RefOr, parse_ref_or_value},
-    token::{
-        ParseState, TryFromJson, TryFromJsonField,
-        utils::{
-            FieldPresence, FloatOrInteger, parse_field, parse_field_no_ref,
-            require_enum_string_with_mapping,
-        },
+    ir::{
+        JsonNumber, RefOr, TryFromJson, parse_ref_or_value, require_enum_string_with_mapping,
+        require_object,
     },
 };
 
@@ -287,8 +283,8 @@ pub enum ColorComponentElement<T> {
     None,
 }
 
-impl<'a> TryFromJsonField<'a> for ColorComponentElement<f64> {
-    fn try_from_json_field(
+impl<'a> TryFromJson<'a> for ColorComponentElement<f64> {
+    fn try_from_json(
         ctx: &mut ParserContext,
         path: &str,
         value: &'a serde_json::Value,
@@ -346,8 +342,8 @@ pub enum ColorSpace {
     XYZD50,
 }
 
-impl<'a> TryFromJsonField<'a> for ColorSpace {
-    fn try_from_json_field(
+impl<'a> TryFromJson<'a> for ColorSpace {
+    fn try_from_json(
         ctx: &mut ParserContext,
         path: &str,
         value: &'a serde_json::Value,
@@ -511,34 +507,50 @@ pub enum ColorComponentValue {
 }
 
 impl ColorComponentArray {
-    pub fn to_color_component_value(&self, color_space: &ColorSpace) -> ColorComponentValue {
+    pub fn to_color_component_value(&self, color_space: &ColorSpace) -> RefOr<ColorComponentValue> {
         match color_space {
-            ColorSpace::SRGB => ColorComponentValue::SRGB(SRGB::from(self.0.clone())),
-            ColorSpace::SRGBLinear => {
-                ColorComponentValue::SRGBLinear(SRGBLinear::from(self.0.clone()))
+            ColorSpace::SRGB => {
+                RefOr::Literal(ColorComponentValue::SRGB(SRGB::from(self.0.clone())))
             }
-            ColorSpace::HSL => ColorComponentValue::HSL(HSL::from(self.0.clone())),
-            ColorSpace::HWB => ColorComponentValue::HWB(HWB::from(self.0.clone())),
-            ColorSpace::CIELAB => ColorComponentValue::CIELAB(CIELAB::from(self.0.clone())),
-            ColorSpace::LCH => ColorComponentValue::LCH(LCH::from(self.0.clone())),
-            ColorSpace::OKLAB => ColorComponentValue::OKLAB(OKLAB::from(self.0.clone())),
-            ColorSpace::OKLCH => ColorComponentValue::OKLCH(OKLCH::from(self.0.clone())),
-            ColorSpace::DisplayP3 => {
-                ColorComponentValue::DisplayP3(DisplayP3::from(self.0.clone()))
+            ColorSpace::SRGBLinear => RefOr::Literal(ColorComponentValue::SRGBLinear(
+                SRGBLinear::from(self.0.clone()),
+            )),
+            ColorSpace::HSL => RefOr::Literal(ColorComponentValue::HSL(HSL::from(self.0.clone()))),
+            ColorSpace::HWB => RefOr::Literal(ColorComponentValue::HWB(HWB::from(self.0.clone()))),
+            ColorSpace::CIELAB => {
+                RefOr::Literal(ColorComponentValue::CIELAB(CIELAB::from(self.0.clone())))
             }
-            ColorSpace::A98RGB => ColorComponentValue::A98RGB(A98RGB::from(self.0.clone())),
-            ColorSpace::ProPhotoRGB => {
-                ColorComponentValue::ProPhotoRGB(ProPhotoRGB::from(self.0.clone()))
+            ColorSpace::LCH => RefOr::Literal(ColorComponentValue::LCH(LCH::from(self.0.clone()))),
+            ColorSpace::OKLAB => {
+                RefOr::Literal(ColorComponentValue::OKLAB(OKLAB::from(self.0.clone())))
             }
-            ColorSpace::Rec2020 => ColorComponentValue::Rec2020(Rec2020::from(self.0.clone())),
-            ColorSpace::XYZD65 => ColorComponentValue::XYZD65(XYZD65::from(self.0.clone())),
-            ColorSpace::XYZD50 => ColorComponentValue::XYZD50(XYZD50::from(self.0.clone())),
+            ColorSpace::OKLCH => {
+                RefOr::Literal(ColorComponentValue::OKLCH(OKLCH::from(self.0.clone())))
+            }
+            ColorSpace::DisplayP3 => RefOr::Literal(ColorComponentValue::DisplayP3(
+                DisplayP3::from(self.0.clone()),
+            )),
+            ColorSpace::A98RGB => {
+                RefOr::Literal(ColorComponentValue::A98RGB(A98RGB::from(self.0.clone())))
+            }
+            ColorSpace::ProPhotoRGB => RefOr::Literal(ColorComponentValue::ProPhotoRGB(
+                ProPhotoRGB::from(self.0.clone()),
+            )),
+            ColorSpace::Rec2020 => {
+                RefOr::Literal(ColorComponentValue::Rec2020(Rec2020::from(self.0.clone())))
+            }
+            ColorSpace::XYZD65 => {
+                RefOr::Literal(ColorComponentValue::XYZD65(XYZD65::from(self.0.clone())))
+            }
+            ColorSpace::XYZD50 => {
+                RefOr::Literal(ColorComponentValue::XYZD50(XYZD50::from(self.0.clone())))
+            }
         }
     }
 }
 
-impl<'a> TryFromJsonField<'a> for ColorComponentArray {
-    fn try_from_json_field(
+impl<'a> TryFromJson<'a> for ColorComponentArray {
+    fn try_from_json(
         ctx: &mut ParserContext,
         path: &str,
         value: &'a serde_json::Value,
@@ -587,28 +599,18 @@ impl<'a> TryFromJsonField<'a> for ColorComponentArray {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ColorAlphaValue(Option<FloatOrInteger>);
+pub struct ColorAlphaValue(Option<JsonNumber>);
 
-impl<'a> TryFromJsonField<'a> for ColorAlphaValue {
-    fn try_from_json_field(
+impl<'a> TryFromJson<'a> for ColorAlphaValue {
+    fn try_from_json(
         ctx: &mut ParserContext,
         path: &str,
         value: &'a serde_json::Value,
     ) -> Option<Self> {
         match value {
-            serde_json::Value::Number(num_val) => {
-                if let Some(float_val) = num_val.as_f64() {
-                    Some(ColorAlphaValue(Some(FloatOrInteger::Float(float_val))))
-                } else if let Some(int_val) = num_val.as_i64() {
-                    Some(ColorAlphaValue(Some(FloatOrInteger::Integer(int_val))))
-                } else {
-                    ctx.push_to_errors(DiagnosticCode::InvalidTokenValue, format!(
-                        "Expected a number for alpha value, but got a number that cannot be represented as f64 or i64: {}",
-                        num_val
-                    ), path.into());
-                    None
-                }
-            }
+            serde_json::Value::Number(_) => Some(ColorAlphaValue(Some(
+                JsonNumber::from_value(value).unwrap(),
+            ))),
             serde_json::Value::Null => Some(ColorAlphaValue(None)),
             _ => {
                 ctx.push_to_errors(
@@ -628,8 +630,8 @@ impl<'a> TryFromJsonField<'a> for ColorAlphaValue {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColorHexValue(HexColorTokenValue);
 
-impl<'a> TryFromJsonField<'a> for ColorHexValue {
-    fn try_from_json_field(
+impl<'a> TryFromJson<'a> for ColorHexValue {
+    fn try_from_json(
         ctx: &mut ParserContext,
         path: &str,
         value: &'a serde_json::Value,
@@ -656,14 +658,14 @@ impl<'a> TryFromJsonField<'a> for ColorHexValue {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColorTokenValue {
     /// The color space of the color token, which determines how the components of the color token should be interpreted
-    pub color_space: ColorSpace,
+    pub color_space: RefOr<ColorSpace>,
     /// The components of the color token, which are interpreted according to the color space of the color token
     pub components: RefOr<ColorComponentArray>,
     /// The alpha component of the color token, which is a float between 0 and 1 representing the opacity of the color.
     /// If the alpha component is not specified, it is assumed to be 1 (fully opaque).
     pub alpha: Option<RefOr<ColorAlphaValue>>,
     /// The hex value of the color token, which is a string representing the color in hexadecimal notation (e.g. "#RRGGBB").
-    pub hex: Option<ColorHexValue>,
+    pub hex: Option<RefOr<ColorHexValue>>,
 }
 
 impl<'a> TryFromJson<'a> for ColorTokenValue {
@@ -671,69 +673,21 @@ impl<'a> TryFromJson<'a> for ColorTokenValue {
         ctx: &mut ParserContext,
         path: &str,
         value: &'a serde_json::Value,
-    ) -> ParseState<Self> {
-        // The DTCG specification defines that a color token value shall be an object with the following properties:
-        // - "color_space": A required string that specifies the color space of the color token, which determines how the components of the color token should be interpreted
-        // - "components": A required object that specifies the components of the color token, which are interpreted according to the color space of the color token
-        // - "alpha": An optional number between 0 and 1 representing the opacity of the color. If the alpha component is not specified, it is assumed to be 1 (fully opaque)
-        // - "hex": An optional string representing the color in hexadecimal notation (e.g. "#RRGGBB"). If the hex value is specified, it must be a valid hex color string and the color components of the color token must match the hex value of the color token
-        match value {
-            serde_json::Value::Object(map) => {
-                let color_space = parse_field_no_ref::<ColorSpace>(
-                    ctx,
-                    path,
-                    map,
-                    "colorSpace",
-                    FieldPresence::Required,
-                );
-                let color_components = parse_field::<ColorComponentArray>(
-                    ctx,
-                    path,
-                    map,
-                    "components",
-                    FieldPresence::Required,
-                );
-                let alpha = parse_field::<ColorAlphaValue>(
-                    ctx,
-                    path,
-                    map,
-                    "alpha",
-                    FieldPresence::Optional,
-                );
-                let hex = parse_field_no_ref::<ColorHexValue>(
-                    ctx,
-                    path,
-                    map,
-                    "hex",
-                    FieldPresence::Optional,
-                );
+    ) -> Option<Self> {
+        let obj = require_object(ctx, path, value, "color token")?;
+        let color_space = obj.required_field::<RefOr<ColorSpace>>(ctx, path, "colorSpace");
+        let components = obj.required_field::<RefOr<ColorComponentArray>>(ctx, path, "components");
+        let alpha = obj.optional_field::<RefOr<ColorAlphaValue>>(ctx, path, "alpha");
+        let hex = obj.optional_field::<RefOr<ColorHexValue>>(ctx, path, "hex");
 
-                match (color_space, color_components) {
-                    (Some(color_space), Some(color_components)) => ParseState::Parsed(Self {
-                        color_space,
-                        components: color_components,
-                        alpha,
-                        hex,
-                    }),
-                    _ => {
-                        // If either the color space or the color components are missing or invalid, we cannot parse the color token value, so we return a fatal error
-                        ParseState::Skipped
-                    }
-                }
-            }
-            _ => {
-                ctx.push_to_errors(
-                    DiagnosticCode::InvalidTokenValue,
-                    format!(
-                        "Expected an object for color token value, but found {}",
-                        value
-                    ),
-                    path.to_string(),
-                );
-                // We return a fatal error here as we should not have made it here, as an earlier check should have
-                // verified if this is an object or not and returned an error if it wasn't, so if we are in this branch it means there is a bug in our code
-                ParseState::Skipped
-            }
+        match (color_space, components) {
+            (Some(color_space), Some(components)) => Some(Self {
+                color_space,
+                components,
+                alpha,
+                hex,
+            }),
+            _ => None,
         }
     }
 }
@@ -743,484 +697,49 @@ mod tests {
     use super::*;
     use crate::{
         FileFormat,
-        errors::DiagnosticCode,
         ir::{JsonPointer, JsonRef, RefOr},
-        token::utils::FloatOrInteger,
     };
-    use serde_json::json;
+    use serde_json::{Number, json};
 
-    fn make_context() -> ParserContext {
-        ParserContext::new(String::from("test.json"), FileFormat::Json, String::new())
-    }
-
-    fn parse_color(value: &serde_json::Value) -> (ParseState<ColorTokenValue>, ParserContext) {
-        let mut ctx = make_context();
-        let result = ColorTokenValue::try_from_json(&mut ctx, "tokens.colors.primary", value);
-        (result, ctx)
-    }
-
-    fn expect_parsed(result: ParseState<ColorTokenValue>) -> ColorTokenValue {
-        let ParseState::Parsed(parsed) = result else {
-            panic!("expected color token to parse successfully");
-        };
-
-        parsed
-    }
-
-    fn matches_color_space_and_components(value: &ColorTokenValue) -> bool {
-        let RefOr::Literal(components) = &value.components else {
-            return false;
-        };
-
-        match (
-            &value.color_space,
-            components.to_color_component_value(&value.color_space),
-        ) {
-            (ColorSpace::SRGB, ColorComponentValue::SRGB(_)) => true,
-            (ColorSpace::SRGBLinear, ColorComponentValue::SRGBLinear(_)) => true,
-            (ColorSpace::HSL, ColorComponentValue::HSL(_)) => true,
-            (ColorSpace::HWB, ColorComponentValue::HWB(_)) => true,
-            (ColorSpace::CIELAB, ColorComponentValue::CIELAB(_)) => true,
-            (ColorSpace::LCH, ColorComponentValue::LCH(_)) => true,
-            (ColorSpace::OKLAB, ColorComponentValue::OKLAB(_)) => true,
-            (ColorSpace::OKLCH, ColorComponentValue::OKLCH(_)) => true,
-            (ColorSpace::DisplayP3, ColorComponentValue::DisplayP3(_)) => true,
-            (ColorSpace::A98RGB, ColorComponentValue::A98RGB(_)) => true,
-            (ColorSpace::ProPhotoRGB, ColorComponentValue::ProPhotoRGB(_)) => true,
-            (ColorSpace::Rec2020, ColorComponentValue::Rec2020(_)) => true,
-            (ColorSpace::XYZD65, ColorComponentValue::XYZD65(_)) => true,
-            (ColorSpace::XYZD50, ColorComponentValue::XYZD50(_)) => true,
-            _ => false,
-        }
+    fn parser_context() -> ParserContext {
+        ParserContext::new("tests.json".into(), FileFormat::Json, String::new())
     }
 
     #[test]
-    fn parses_valid_srgb_color_with_optional_fields() {
-        let value = json!({
-            "colorSpace": "srgb",
-            "components": [0.25, 0.5, 0.75],
-            "alpha": 0.4,
-            "hex": "#abc"
-        });
-
-        let (result, ctx) = parse_color(&value);
-
-        assert!(ctx.errors.is_empty());
-
-        let parsed = expect_parsed(result);
-
-        assert!(matches!(parsed.color_space, ColorSpace::SRGB));
-        assert_eq!(
-            parsed.components,
-            RefOr::Literal(ColorComponentArray([
-                RefOr::Literal(ColorComponentElement::Value(0.25)),
-                RefOr::Literal(ColorComponentElement::Value(0.5)),
-                RefOr::Literal(ColorComponentElement::Value(0.75)),
-            ]))
-        );
-        assert_eq!(
-            parsed.alpha,
-            Some(RefOr::Literal(ColorAlphaValue(Some(
-                FloatOrInteger::Float(0.4,)
-            ))))
-        );
-        assert_eq!(parsed.hex, Some(ColorHexValue("#abc".to_string())));
-    }
-
-    #[test]
-    fn parses_none_component_for_lch_color() {
-        let value = json!({
-            "colorSpace": "lch",
-            "components": [50.0, "none", 180.0]
-        });
-
-        let (result, ctx) = parse_color(&value);
-
-        assert!(ctx.errors.is_empty());
-
-        let parsed = expect_parsed(result);
-
-        assert_eq!(parsed.color_space, ColorSpace::LCH);
-        assert_eq!(
-            parsed.components,
-            RefOr::Literal(ColorComponentArray([
-                RefOr::Literal(ColorComponentElement::Value(50.0)),
-                RefOr::Literal(ColorComponentElement::None),
-                RefOr::Literal(ColorComponentElement::Value(180.0)),
-            ]))
-        );
-    }
-
-    #[test]
-    fn parses_components_and_alpha_as_references() {
-        let value = json!({
-            "colorSpace": "srgb",
-            "components": { "$ref": "#/tokens/colors/base/components" },
-            "alpha": { "$ref": "" }
-        });
-
-        let (result, ctx) = parse_color(&value);
-
-        assert!(ctx.errors.is_empty());
-
-        let parsed = expect_parsed(result);
-
-        assert_eq!(parsed.color_space, ColorSpace::SRGB);
-        assert_eq!(
-            parsed.components,
-            RefOr::Ref(JsonRef::new_local_pointer(
-                "#/tokens/colors/base/components".to_string(),
-                JsonPointer::from("#/tokens/colors/base/components"),
-            ))
-        );
-        assert_eq!(
-            parsed.alpha,
-            Some(RefOr::Ref(JsonRef::new_local_pointer(
-                String::new(),
-                JsonPointer::new(),
-            )))
-        );
-        assert_eq!(parsed.hex, None);
-    }
-
-    #[test]
-    fn parses_all_supported_color_spaces_with_valid_components() {
-        let cases = [
-            ("srgb", ColorSpace::SRGB, json!([0.0, 1.0, 0.5])),
-            (
-                "srgb-linear",
-                ColorSpace::SRGBLinear,
-                json!([0.0, 1.0, 0.5]),
-            ),
-            ("hsl", ColorSpace::HSL, json!([359.0, 0.0, 100.0])),
-            ("hwb", ColorSpace::HWB, json!([0.0, 0.0, 100.0])),
-            ("cielab", ColorSpace::CIELAB, json!([0.0, -50.0, 50.0])),
-            ("lch", ColorSpace::LCH, json!([100.0, 0.0, 359.0])),
-            ("oklab", ColorSpace::OKLAB, json!([50.0, -0.5, 0.5])),
-            ("oklch", ColorSpace::OKLCH, json!([100.0, 0.0, 359.0])),
-            ("display-p3", ColorSpace::DisplayP3, json!([0.0, 1.0, 0.5])),
-            ("a98rgb", ColorSpace::A98RGB, json!([0.0, 1.0, 0.5])),
-            (
-                "prophoto-rgb",
-                ColorSpace::ProPhotoRGB,
-                json!([0.0, 1.0, 0.5]),
-            ),
-            ("rec2020", ColorSpace::Rec2020, json!([0.0, 1.0, 0.5])),
-            ("xyz-d65", ColorSpace::XYZD65, json!([0.0, 1.0, 0.5])),
-            ("xyz-d50", ColorSpace::XYZD50, json!([0.0, 1.0, 0.5])),
-        ];
-
-        for (color_space_name, expected_color_space, components) in cases {
-            let value = json!({
-                "colorSpace": color_space_name,
-                "components": components
-            });
-
-            let (result, ctx) = parse_color(&value);
-
-            assert!(
-                ctx.errors.is_empty(),
-                "unexpected diagnostics for {color_space_name}"
-            );
-
-            let parsed = expect_parsed(result);
-
-            assert_eq!(parsed.color_space, expected_color_space);
-            assert!(
-                matches_color_space_and_components(&parsed),
-                "expected color space and components to match for {color_space_name}"
-            );
-        }
-    }
-
-    #[test]
-    fn skips_when_required_fields_are_missing() {
-        let value = json!({});
-
-        let (result, ctx) = parse_color(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 2);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::MissingRequiredProperty);
-        assert_eq!(ctx.errors[0].message, "Missing required field: colorSpace");
-        assert_eq!(ctx.errors[1].code, DiagnosticCode::MissingRequiredProperty);
-        assert_eq!(ctx.errors[1].message, "Missing required field: components");
-    }
-
-    #[test]
-    fn skips_when_color_space_is_invalid() {
-        let value = json!({
-            "colorSpace": "ansi-rgb",
-            "components": [0.1, 0.2, 0.3]
-        });
-
-        let (result, ctx) = parse_color(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidEnumValue);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Expected one of srgb, srgb-linear, hsl, hwb, cielab, lch, oklab, oklch, display-p3, a98rgb, prophoto-rgb, rec2020, xyz-d65, xyz-d50 for the field 'colorSpace', but got 'ansi-rgb'"
-        );
-        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
-    }
-
-    #[test]
-    fn skips_when_components_field_has_wrong_type() {
-        let value = json!({
-            "colorSpace": "srgb",
-            "components": true
-        });
-
-        let (result, ctx) = parse_color(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Expected an array of length 3 for color components, but got a value of type true"
-        );
-        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
-    }
-
-    #[test]
-    fn skips_when_component_array_has_wrong_length() {
-        let value = json!({
-            "colorSpace": "srgb",
-            "components": [0.1, 0.2]
-        });
-
-        let (result, ctx) = parse_color(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Expected an array of length 3 for color components, but got an array of length 2"
-        );
-        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
-    }
-
-    #[test]
-    fn skips_when_component_keyword_is_not_none_and_reports_follow_up_error() {
-        let value = json!({
-            "colorSpace": "srgb",
-            "components": [0.1, "invalid", 0.3]
-        });
-
-        let (result, ctx) = parse_color(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 2);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Expected a string with the value 'none' or a number for color components, but got a string with the value 'invalid'"
-        );
-        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
-        assert_eq!(ctx.errors[1].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[1].message,
-            "Expected a string with the value 'none', a number, or a reference for color components, but got a value of type \"invalid\""
-        );
-        assert_eq!(ctx.errors[1].path, "tokens.colors.primary");
-    }
-
-    #[test]
-    fn skips_when_component_reference_is_invalid_and_reports_follow_up_error() {
-        let value = json!({
-            "colorSpace": "srgb",
-            "components": [0.1, { "$ref": "tokens/colors/base/components/1" }, 0.3]
-        });
-
-        let (result, ctx) = parse_color(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 2);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidReference);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Invalid JSON pointer: tokens/colors/base/components/1"
-        );
-        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
-        assert_eq!(ctx.errors[1].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[1].message,
-            "Expected a string with the value 'none', a number, or a reference for color components, but got a value of type {\"$ref\":\"tokens/colors/base/components/1\"}"
-        );
-        assert_eq!(ctx.errors[1].path, "tokens.colors.primary");
-    }
-
-    #[test]
-    fn keeps_parsing_when_alpha_is_out_of_range_because_no_validation_runs() {
-        let value = json!({
-            "colorSpace": "srgb",
-            "components": [0.1, 0.2, 0.3],
-            "alpha": 1.5
-        });
-
-        let (result, ctx) = parse_color(&value);
-        let parsed = expect_parsed(result);
-
-        assert!(ctx.errors.is_empty());
-        assert_eq!(
-            parsed.alpha,
-            Some(RefOr::Literal(ColorAlphaValue(Some(
-                FloatOrInteger::Float(1.5,)
-            ))))
-        );
-    }
-
-    #[test]
-    fn keeps_parsing_when_alpha_has_wrong_json_type() {
-        let value = json!({
-            "colorSpace": "srgb",
-            "components": [0.1, 0.2, 0.3],
-            "alpha": "opaque"
-        });
-
-        let (result, ctx) = parse_color(&value);
-
-        let parsed = expect_parsed(result);
-
-        assert_eq!(parsed.alpha, None);
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Expected a number or null for alpha value, but got a value of type \"opaque\""
-        );
-        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
-    }
-
-    #[test]
-    fn keeps_parsing_when_hex_contents_are_not_validated() {
-        let value = json!({
-            "colorSpace": "srgb",
-            "components": [0.1, 0.2, 0.3],
-            "hex": "#12"
-        });
-
-        let (result, ctx) = parse_color(&value);
-
-        let parsed = expect_parsed(result);
-
-        assert!(ctx.errors.is_empty());
-        assert_eq!(parsed.hex, Some(ColorHexValue("#12".to_string())));
-    }
-
-    #[test]
-    fn keeps_parsing_when_hex_has_wrong_json_type() {
-        let value = json!({
-            "colorSpace": "srgb",
-            "components": [0.1, 0.2, 0.3],
-            "hex": false
-        });
-
-        let (result, ctx) = parse_color(&value);
-
-        let parsed = expect_parsed(result);
-
-        assert_eq!(parsed.hex, None);
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Expected a string for hex color token value, but got a value of type false"
-        );
-        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
-    }
-
-    #[test]
-    fn returns_error_for_non_object_value_and_records_diagnostic() {
-        let value = json!("#ff0099");
-
-        let (result, ctx) = parse_color(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Expected an object for color token value, but found \"#ff0099\""
-        );
-        assert_eq!(ctx.errors[0].path, "tokens.colors.primary");
-    }
-
-    #[test]
-    fn validates_hex_color_formats() {
+    fn validates_hex_color_token_values() {
         assert!(validation::validate_hex_color_token_value("#f09"));
         assert!(validation::validate_hex_color_token_value("#f09c"));
         assert!(validation::validate_hex_color_token_value("#ff0099"));
         assert!(!validation::validate_hex_color_token_value("ff0099"));
-        assert!(!validation::validate_hex_color_token_value("#ff"));
-        assert!(!validation::validate_hex_color_token_value("#ggg"));
+        assert!(!validation::validate_hex_color_token_value("#ff009"));
+        assert!(!validation::validate_hex_color_token_value("#gg0099"));
     }
 
     #[test]
-    fn validates_component_arrays_directly() {
-        let mut ctx = make_context();
-
-        let parsed = validation::validate_component_array(
-            &mut ctx,
-            "tokens.colors.primary",
-            &[json!(0.1), json!("none"), json!(0.3)],
-        )
-        .expect("expected valid component array");
-
-        assert!(matches!(parsed[0], ColorComponentElement::Value(0.1)));
-        assert!(matches!(parsed[1], ColorComponentElement::None));
-        assert!(matches!(parsed[2], ColorComponentElement::Value(0.3)));
-        assert!(ctx.errors.is_empty());
-    }
-
-    #[test]
-    fn rejects_component_arrays_with_invalid_value_types() {
-        let mut ctx = make_context();
-
-        let parsed = validation::validate_component_array(
-            &mut ctx,
-            "tokens.colors.primary",
-            &[json!(0.1), json!(true), json!(0.3)],
-        );
-
-        assert!(parsed.is_none());
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Expected a string with the value 'none' or a number for color components, but got a value of type true"
-        );
-    }
-
-    #[test]
-    fn validate_range_handles_none_inclusive_and_exclusive_bounds() {
-        let mut ctx = make_context();
+    fn validates_component_ranges_and_boundaries() {
+        let mut ctx = parser_context();
 
         assert!(validation::validate_range(
             &mut ctx,
-            "tokens.colors.primary",
+            "/token",
+            "red",
+            &ColorComponentElement::Value(0.5),
+            0.0,
+            1.0,
+            true,
+        ));
+        assert!(validation::validate_range(
+            &mut ctx,
+            "/token",
             "red",
             &ColorComponentElement::None,
             0.0,
             1.0,
             true,
         ));
-        assert!(validation::validate_range(
-            &mut ctx,
-            "tokens.colors.primary",
-            "red",
-            &ColorComponentElement::Value(1.0),
-            0.0,
-            1.0,
-            true,
-        ));
         assert!(!validation::validate_range(
             &mut ctx,
-            "tokens.colors.primary",
+            "/token",
             "hue",
             &ColorComponentElement::Value(360.0),
             0.0,
@@ -1230,57 +749,376 @@ mod tests {
 
         assert_eq!(ctx.errors.len(), 1);
         assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Invalid color component value at path 'tokens.colors.primary.hue': Value must be between 0 and 360 (exclusive)"
-        );
+        assert_eq!(ctx.errors[0].path, "/token");
     }
 
     #[test]
-    fn validate_non_negative_and_alpha_cover_boundaries() {
-        let mut ctx = make_context();
+    fn validates_non_negative_and_alpha_values() {
+        let mut ctx = parser_context();
 
         assert!(validation::validate_non_negative(
             &mut ctx,
-            "tokens.colors.primary",
+            "/token",
             "chroma",
             &ColorComponentElement::Value(0.0),
         ));
         assert!(!validation::validate_non_negative(
             &mut ctx,
-            "tokens.colors.primary",
+            "/token",
             "chroma",
-            &ColorComponentElement::Value(-0.1),
+            &ColorComponentElement::Value(-0.01),
         ));
-        assert!(validation::validate_alpha(
-            &mut ctx,
-            "tokens.colors.primary",
-            None
-        ));
-        assert!(validation::validate_alpha(
-            &mut ctx,
-            "tokens.colors.primary",
-            Some(0.0),
-        ));
-        assert!(validation::validate_alpha(
-            &mut ctx,
-            "tokens.colors.primary",
-            Some(1.0),
-        ));
-        assert!(!validation::validate_alpha(
-            &mut ctx,
-            "tokens.colors.primary",
-            Some(-0.01),
-        ));
+        assert!(validation::validate_alpha(&mut ctx, "/token", Some(1.0)));
+        assert!(validation::validate_alpha(&mut ctx, "/token", None));
+        assert!(!validation::validate_alpha(&mut ctx, "/token", Some(1.1)));
 
         assert_eq!(ctx.errors.len(), 2);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors[1].code, DiagnosticCode::InvalidTokenValue);
+    }
+
+    #[test]
+    fn validates_component_array_helper() {
+        let mut ctx = parser_context();
+        let components = vec![json!(0.1), json!("none"), json!(1.0)];
+
+        let parsed = validation::validate_component_array(&mut ctx, "/token", &components);
+
         assert_eq!(
-            ctx.errors[0].message,
-            "Invalid color component value at path 'tokens.colors.primary.chroma': Value must be non-negative"
+            parsed,
+            Some([
+                ColorComponentElement::Value(0.1),
+                ColorComponentElement::None,
+                ColorComponentElement::Value(1.0),
+            ])
         );
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_component_array_helper_inputs() {
+        let mut ctx = parser_context();
+
+        let wrong_length = validation::validate_component_array(&mut ctx, "/token", &[json!(0.1)]);
+        let invalid_string = validation::validate_component_array(
+            &mut ctx,
+            "/token",
+            &[json!(0.1), json!("bad"), json!(1.0)],
+        );
+
+        assert_eq!(wrong_length, None);
+        assert_eq!(invalid_string, None);
+        assert_eq!(ctx.errors.len(), 2);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors[1].code, DiagnosticCode::InvalidTokenValue);
+    }
+
+    #[test]
+    fn parses_color_component_elements() {
+        let mut ctx = parser_context();
+
+        let none = ColorComponentElement::<f64>::try_from_json(&mut ctx, "/token", &json!("NoNe"));
+        let value = ColorComponentElement::<f64>::try_from_json(&mut ctx, "/token", &json!(0.25));
+
+        assert_eq!(none, Some(ColorComponentElement::None));
+        assert_eq!(value, Some(ColorComponentElement::Value(0.25)));
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_color_component_element() {
+        let mut ctx = parser_context();
+
+        let parsed = ColorComponentElement::<f64>::try_from_json(&mut ctx, "/token", &json!(true));
+
+        assert_eq!(parsed, None);
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors[0].path, "/token");
+    }
+
+    #[test]
+    fn parses_color_space_case_insensitively() {
+        let mut ctx = parser_context();
+
+        let parsed = ColorSpace::try_from_json(&mut ctx, "/token/colorSpace", &json!("Display-P3"));
+
+        assert_eq!(parsed, Some(ColorSpace::DisplayP3));
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn rejects_unknown_color_space() {
+        let mut ctx = parser_context();
+
+        let parsed = ColorSpace::try_from_json(&mut ctx, "/token/colorSpace", &json!("rgb"));
+
+        assert_eq!(parsed, None);
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidEnumValue);
+        assert_eq!(ctx.errors[0].path, "/token/colorSpace");
+    }
+
+    #[test]
+    fn parses_color_component_array_with_literals_and_reference() {
+        let mut ctx = parser_context();
+        let value = json!([0.1, "none", { "$ref": "#/palette/blue" }]);
+
+        let parsed = ColorComponentArray::try_from_json(&mut ctx, "/token/components", &value);
+
         assert_eq!(
-            ctx.errors[1].message,
-            "Invalid color component value at path 'tokens.colors.primary.alpha': Alpha value must be between 0 and 1 (inclusive)"
+            parsed,
+            Some(ColorComponentArray([
+                RefOr::Literal(ColorComponentElement::Value(0.1)),
+                RefOr::Literal(ColorComponentElement::None),
+                RefOr::Ref(JsonRef::new_local_pointer(
+                    "#/palette/blue".into(),
+                    JsonPointer::from("#/palette/blue"),
+                )),
+            ]))
         );
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn rejects_color_component_array_with_invalid_length() {
+        let mut ctx = parser_context();
+
+        let parsed =
+            ColorComponentArray::try_from_json(&mut ctx, "/token/components", &json!([0.1, 0.2]));
+
+        assert_eq!(parsed, None);
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors[0].path, "/token/components");
+    }
+
+    #[test]
+    fn rejects_color_component_array_with_invalid_item_type() {
+        let mut ctx = parser_context();
+
+        let parsed = ColorComponentArray::try_from_json(
+            &mut ctx,
+            "/token/components",
+            &json!([0.1, true, 0.3]),
+        );
+
+        assert_eq!(parsed, None);
+        assert_eq!(ctx.errors.len(), 2);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors[0].path, "/token/components");
+        assert_eq!(ctx.errors[1].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors[1].path, "/token/components");
+    }
+
+    #[test]
+    fn rejects_color_component_array_with_invalid_reference() {
+        let mut ctx = parser_context();
+
+        let parsed = ColorComponentArray::try_from_json(
+            &mut ctx,
+            "/token/components",
+            &json!([0.1, { "$ref": "not-a-pointer" }, 0.3]),
+        );
+
+        assert_eq!(parsed, None);
+        assert_eq!(ctx.errors.len(), 2);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidReference);
+        assert_eq!(ctx.errors[0].path, "/token/components");
+        assert_eq!(ctx.errors[1].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors[1].path, "/token/components");
+    }
+
+    #[test]
+    fn parses_alpha_and_hex_values() {
+        let mut ctx = parser_context();
+
+        let alpha = ColorAlphaValue::try_from_json(&mut ctx, "/token/alpha", &json!(0.5));
+        let alpha_null = ColorAlphaValue::try_from_json(&mut ctx, "/token/alpha", &json!(null));
+        let hex = ColorHexValue::try_from_json(&mut ctx, "/token/hex", &json!("#ff0099"));
+
+        assert_eq!(
+            alpha,
+            Some(ColorAlphaValue(Some(JsonNumber(
+                Number::from_f64(0.5).unwrap()
+            ))))
+        );
+        assert_eq!(alpha_null, Some(ColorAlphaValue(None)));
+        assert_eq!(hex, Some(ColorHexValue("#ff0099".into())));
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_alpha_and_hex_types() {
+        let mut ctx = parser_context();
+
+        let alpha = ColorAlphaValue::try_from_json(&mut ctx, "/token/alpha", &json!("opaque"));
+        let hex = ColorHexValue::try_from_json(&mut ctx, "/token/hex", &json!(42));
+
+        assert_eq!(alpha, None);
+        assert_eq!(hex, None);
+        assert_eq!(ctx.errors.len(), 2);
+        assert_eq!(ctx.errors[0].path, "/token/alpha");
+        assert_eq!(ctx.errors[1].path, "/token/hex");
+    }
+
+    #[test]
+    fn converts_component_array_to_color_component_value() {
+        let array = ColorComponentArray([
+            RefOr::Literal(ColorComponentElement::Value(0.1)),
+            RefOr::Literal(ColorComponentElement::Value(0.2)),
+            RefOr::Literal(ColorComponentElement::Value(0.3)),
+        ]);
+
+        let srgb = array.to_color_component_value(&ColorSpace::SRGB);
+        let xyz = array.to_color_component_value(&ColorSpace::XYZD65);
+
+        assert!(matches!(srgb, RefOr::Literal(ColorComponentValue::SRGB(_))));
+        assert!(matches!(
+            xyz,
+            RefOr::Literal(ColorComponentValue::XYZD65(_))
+        ));
+    }
+
+    #[test]
+    fn parses_color_token_with_all_fields() {
+        let mut ctx = parser_context();
+        let value = json!({
+            "colorSpace": "srgb",
+            "components": [0.1, 0.2, 0.3],
+            "alpha": 0.5,
+            "hex": "#19334d"
+        });
+
+        let parsed = ColorTokenValue::try_from_json(&mut ctx, "/token", &value);
+
+        assert_eq!(
+            parsed,
+            Some(ColorTokenValue {
+                color_space: RefOr::Literal(ColorSpace::SRGB),
+                components: RefOr::Literal(ColorComponentArray([
+                    RefOr::Literal(ColorComponentElement::Value(0.1)),
+                    RefOr::Literal(ColorComponentElement::Value(0.2)),
+                    RefOr::Literal(ColorComponentElement::Value(0.3)),
+                ])),
+                alpha: Some(RefOr::Literal(ColorAlphaValue(Some(JsonNumber(
+                    Number::from_f64(0.5).unwrap(),
+                ))))),
+                hex: Some(RefOr::Literal(ColorHexValue("#19334d".into()))),
+            })
+        );
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn parses_color_token_with_references_for_fields() {
+        let mut ctx = parser_context();
+        let value = json!({
+            "colorSpace": { "$ref": "#/palette/space" },
+            "components": { "$ref": "#/palette/components" },
+            "alpha": { "$ref": "#/palette/alpha" },
+            "hex": { "$ref": "#/palette/hex" }
+        });
+
+        let parsed = ColorTokenValue::try_from_json(&mut ctx, "/token", &value).unwrap();
+
+        match parsed.color_space {
+            RefOr::Ref(json_ref) => assert_eq!(
+                json_ref,
+                JsonRef::new_local_pointer(
+                    "#/palette/space".to_string(),
+                    JsonPointer::from("#/palette/space")
+                )
+            ),
+            _ => panic!("expected colorSpace to be a reference"),
+        }
+        match parsed.components {
+            RefOr::Ref(json_ref) => assert_eq!(
+                json_ref,
+                JsonRef::new_local_pointer(
+                    "#/palette/components".to_string(),
+                    JsonPointer::from("#/palette/components")
+                )
+            ),
+            _ => panic!("expected components to be a reference"),
+        }
+        match parsed.alpha {
+            Some(RefOr::Ref(json_ref)) => assert_eq!(
+                json_ref,
+                JsonRef::new_local_pointer(
+                    "#/palette/alpha".to_string(),
+                    JsonPointer::from("#/palette/alpha")
+                )
+            ),
+            _ => panic!("expected alpha to be a reference"),
+        }
+        match parsed.hex {
+            Some(RefOr::Ref(json_ref)) => assert_eq!(
+                json_ref,
+                JsonRef::new_local_pointer(
+                    "#/palette/hex".to_string(),
+                    JsonPointer::from("#/palette/hex")
+                )
+            ),
+            _ => panic!("expected hex to be a reference"),
+        }
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn reports_missing_required_color_token_fields() {
+        let mut ctx = parser_context();
+        let value = json!({});
+
+        let parsed = ColorTokenValue::try_from_json(&mut ctx, "/token", &value);
+
+        assert_eq!(parsed, None);
+        assert_eq!(ctx.errors.len(), 2);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::MissingRequiredProperty);
+        assert_eq!(ctx.errors[0].path, "/token/colorSpace");
+        assert_eq!(ctx.errors[1].code, DiagnosticCode::MissingRequiredProperty);
+        assert_eq!(ctx.errors[1].path, "/token/components");
+    }
+
+    #[test]
+    fn preserves_color_token_when_optional_fields_are_invalid() {
+        let mut ctx = parser_context();
+        let value = json!({
+            "colorSpace": "srgb",
+            "components": [0.1, 0.2, 0.3],
+            "alpha": "opaque",
+            "hex": 42
+        });
+
+        let parsed = ColorTokenValue::try_from_json(&mut ctx, "/token", &value);
+
+        assert_eq!(
+            parsed,
+            Some(ColorTokenValue {
+                color_space: RefOr::Literal(ColorSpace::SRGB),
+                components: RefOr::Literal(ColorComponentArray([
+                    RefOr::Literal(ColorComponentElement::Value(0.1)),
+                    RefOr::Literal(ColorComponentElement::Value(0.2)),
+                    RefOr::Literal(ColorComponentElement::Value(0.3)),
+                ])),
+                alpha: None,
+                hex: None,
+            })
+        );
+        assert_eq!(ctx.errors.len(), 2);
+        assert_eq!(ctx.errors[0].path, "/token/alpha");
+        assert_eq!(ctx.errors[1].path, "/token/hex");
+    }
+
+    #[test]
+    fn rejects_invalid_top_level_color_token_shape() {
+        let mut ctx = parser_context();
+
+        let parsed = ColorTokenValue::try_from_json(&mut ctx, "/token", &json!("#fff"));
+
+        assert_eq!(parsed, None);
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
+        assert_eq!(ctx.errors[0].path, "/token");
     }
 }

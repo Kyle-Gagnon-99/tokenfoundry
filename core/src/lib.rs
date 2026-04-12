@@ -4,7 +4,10 @@
 //! for parsing, transforming, and generating tokens in different formats, while the CLI will provide a command-line interface
 //! for users to interact with the core functionality.
 
-use crate::errors::{Diagnostic, DiagnosticCode};
+use crate::{
+    errors::{Diagnostic, DiagnosticCode},
+    ir::IrDocument,
+};
 
 pub mod config;
 pub mod errors;

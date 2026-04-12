@@ -48,7 +48,7 @@ impl TokenPath {
     /// # Examples
     ///
     /// ```
-    /// use token_shift_core::token::ir::TokenPath;
+    /// use tokenfoundry_core::ir::TokenPath;
     /// let path = TokenPath::from_segments(vec!["group1", "subgroupA", "tokenX"]);
     /// ```
     pub fn from_segments<I, S>(segments: I) -> Self
@@ -75,7 +75,7 @@ impl TokenPath {
     /// # Examples
     ///
     /// ```
-    /// use token_shift_core::token::ir::TokenPath;
+    /// use tokenfoundry_core::ir::TokenPath;
     ///
     /// let base_path = TokenPath::from_segments(vec!["group1", "subgroupA"]);
     /// let new_path = base_path.child("tokenX");
@@ -96,7 +96,7 @@ impl TokenPath {
     /// # Examples
     ///
     /// ```
-    /// use token_shift_core::token::ir::TokenPath;
+    /// use tokenfoundry_core::ir::TokenPath;
     /// let path = TokenPath::from_segments(vec!["group1", "subgroupA", "tokenX"]);
     /// assert_eq!(path.as_dot_path(), "group1.subgroupA.tokenX");
     /// ```

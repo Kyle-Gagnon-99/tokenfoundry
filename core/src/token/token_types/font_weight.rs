@@ -1,13 +1,11 @@
 //! The `font_weight` module defines the data structures for font weight tokens defined in the DTCG specification,
 //! which represents the weight of a font in the UI, such as normal, bold, or numeric values like 400, 700, etc.
 
-use crate::{
-    ir::{RefOr, parse_ref_or_value},
-    token::{TryFromJson, TryFromJsonField, utils::FloatOrInteger},
-};
+use crate::ir::{JsonNumber, RefOr, TryFromJson, parse_ref_or_value};
 
 /// The `FontWeightValueString` enum represents the allowed string values for font weight tokens, as defined in the DTCG specification.
 /// This uses the OpenType wght tag specifcation for font weight strings
+#[derive(Debug, Clone, PartialEq)]
 pub enum FontWeightValueString {
     Thin,
     Hairline,
@@ -35,7 +33,7 @@ impl std::str::FromStr for FontWeightValueString {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
+        match s {
             "thin" => Ok(FontWeightValueString::Thin),
             "hairline" => Ok(FontWeightValueString::Hairline),
             "extra-light" | "ultra-light" => Ok(FontWeightValueString::ExtraLight),
@@ -53,32 +51,22 @@ impl std::str::FromStr for FontWeightValueString {
 }
 
 /// The `FontWeightValue` enum represents the value of a font weight token, which can be either a numeric value (e.g. 400, 700) or a string value (e.g. "normal", "bold")
+#[derive(Debug, Clone, PartialEq)]
 pub enum FontWeightValue {
-    Numeric(FloatOrInteger),
+    Numeric(JsonNumber),
     String(FontWeightValueString),
 }
 
-impl<'a> TryFromJsonField<'a> for FontWeightValue {
-    fn try_from_json_field(
+impl<'a> TryFromJson<'a> for FontWeightValue {
+    fn try_from_json(
         ctx: &mut crate::ParserContext,
         path: &str,
         value: &'a serde_json::Value,
     ) -> Option<Self> {
         match value {
-            serde_json::Value::Number(number) => match number.try_into() {
-                Ok(parsed_number) => Some(FontWeightValue::Numeric(parsed_number)),
-                Err(_) => {
-                    ctx.push_to_errors(
-                        crate::errors::DiagnosticCode::InvalidTokenValue,
-                        format!(
-                            "Invalid font weight token numeric value '{}', expected a valid number",
-                            number
-                        ),
-                        path.into(),
-                    );
-                    None
-                }
-            },
+            serde_json::Value::Number(_) => Some(FontWeightValue::Numeric(
+                JsonNumber::from_value(value).unwrap(),
+            )),
             serde_json::Value::String(string_val) => {
                 match string_val.parse::<FontWeightValueString>() {
                     Ok(parsed_string) => Some(FontWeightValue::String(parsed_string)),
@@ -111,6 +99,7 @@ impl<'a> TryFromJsonField<'a> for FontWeightValue {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FontWeightTokenValue(RefOr<FontWeightValue>);
 
 impl<'a> TryFromJson<'a> for FontWeightTokenValue {
@@ -118,11 +107,8 @@ impl<'a> TryFromJson<'a> for FontWeightTokenValue {
         ctx: &mut crate::ParserContext,
         path: &str,
         value: &'a serde_json::Value,
-    ) -> crate::token::ParseState<Self> {
-        match parse_ref_or_value::<FontWeightValue>(ctx, path, value) {
-            Some(v) => crate::token::ParseState::Parsed(FontWeightTokenValue(v)),
-            None => crate::token::ParseState::Skipped,
-        }
+    ) -> Option<Self> {
+        parse_ref_or_value(ctx, path, value).map(FontWeightTokenValue)
     }
 }
 
@@ -132,169 +118,179 @@ mod tests {
     use crate::{
         FileFormat, ParserContext,
         errors::DiagnosticCode,
-        ir::{JsonPointer, JsonRef},
-        token::ParseState,
+        ir::{JsonPointer, JsonRef, RefOr},
     };
-    use serde_json::json;
+    use serde_json::{Number, json};
 
-    fn make_context() -> ParserContext {
-        ParserContext::new(String::from("test.json"), FileFormat::Json, String::new())
+    fn parser_context() -> ParserContext {
+        ParserContext::new("tests.json".into(), FileFormat::Json, String::new())
     }
 
-    fn parse_font_weight(
-        value: &serde_json::Value,
-    ) -> (ParseState<FontWeightTokenValue>, ParserContext) {
-        let mut ctx = make_context();
-        let result = FontWeightTokenValue::try_from_json(
+    #[test]
+    fn parses_numeric_font_weight_value() {
+        let mut ctx = parser_context();
+
+        let parsed = FontWeightValue::try_from_json(&mut ctx, "/token", &json!(400));
+
+        match parsed {
+            Some(FontWeightValue::Numeric(JsonNumber(number))) => {
+                assert_eq!(number, Number::from(400));
+            }
+            _ => panic!("expected numeric font weight"),
+        }
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn parses_fractional_numeric_font_weight_value() {
+        let mut ctx = parser_context();
+
+        let parsed = FontWeightValue::try_from_json(&mut ctx, "/token", &json!(425.5));
+
+        match parsed {
+            Some(FontWeightValue::Numeric(JsonNumber(number))) => {
+                assert_eq!(number, Number::from_f64(425.5).unwrap());
+            }
+            _ => panic!("expected numeric font weight"),
+        }
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn parses_canonical_font_weight_strings() {
+        let mut ctx = parser_context();
+
+        let thin = FontWeightValue::try_from_json(&mut ctx, "/token", &json!("thin"));
+        let bold = FontWeightValue::try_from_json(&mut ctx, "/token", &json!("bold"));
+        let extra_black = FontWeightValue::try_from_json(&mut ctx, "/token", &json!("extra-black"));
+
+        assert!(matches!(
+            thin,
+            Some(FontWeightValue::String(FontWeightValueString::Thin))
+        ));
+        assert!(matches!(
+            bold,
+            Some(FontWeightValue::String(FontWeightValueString::Bold))
+        ));
+        assert!(matches!(
+            extra_black,
+            Some(FontWeightValue::String(FontWeightValueString::ExtraBlack))
+        ));
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn rejects_unknown_font_weight_string() {
+        let mut ctx = parser_context();
+
+        let parsed = FontWeightValue::try_from_json(&mut ctx, "/token", &json!("superbold"));
+
+        assert!(parsed.is_none());
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors[0].path, "/token");
+        assert!(
+            ctx.errors[0]
+                .message
+                .contains("Invalid font weight token string value")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_font_weight_value_type() {
+        let mut ctx = parser_context();
+
+        let parsed = FontWeightValue::try_from_json(&mut ctx, "/token", &json!([400]));
+
+        assert!(parsed.is_none());
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors[0].path, "/token");
+    }
+
+    #[test]
+    fn parses_font_weight_token_value_as_literal_number() {
+        let mut ctx = parser_context();
+
+        let parsed = FontWeightTokenValue::try_from_json(&mut ctx, "/token", &json!(700));
+
+        match parsed {
+            Some(FontWeightTokenValue(RefOr::Literal(FontWeightValue::Numeric(JsonNumber(
+                number,
+            ))))) => {
+                assert_eq!(number, Number::from(700));
+            }
+            _ => panic!("expected literal numeric token value"),
+        }
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn parses_font_weight_token_value_as_literal_string() {
+        let mut ctx = parser_context();
+
+        let parsed = FontWeightTokenValue::try_from_json(&mut ctx, "/token", &json!("book"));
+
+        assert!(matches!(
+            parsed,
+            Some(FontWeightTokenValue(RefOr::Literal(
+                FontWeightValue::String(FontWeightValueString::Normal,)
+            )))
+        ));
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn parses_font_weight_token_value_as_top_level_reference() {
+        let mut ctx = parser_context();
+
+        let parsed = FontWeightTokenValue::try_from_json(
             &mut ctx,
-            "tokens.typography.body.fontWeight",
-            value,
+            "/token",
+            &json!({ "$ref": "#/fonts/body/weight" }),
         );
-        (result, ctx)
-    }
 
-    #[test]
-    fn parses_numeric_font_weight() {
-        let value = json!(400);
-
-        let (result, ctx) = parse_font_weight(&value);
-
+        match parsed {
+            Some(FontWeightTokenValue(RefOr::Ref(json_ref))) => {
+                assert_eq!(
+                    json_ref,
+                    JsonRef::new_local_pointer(
+                        "#/fonts/body/weight".to_string(),
+                        JsonPointer::from("#/fonts/body/weight")
+                    )
+                );
+            }
+            _ => panic!("expected top-level reference token value"),
+        }
         assert!(ctx.errors.is_empty());
-
-        let ParseState::Parsed(FontWeightTokenValue(parsed)) = result else {
-            panic!("expected parsed font weight token");
-        };
-
-        assert!(matches!(
-            parsed,
-            RefOr::Literal(FontWeightValue::Numeric(FloatOrInteger::Integer(400)))
-        ));
     }
 
     #[test]
-    fn parses_string_font_weight_case_insensitively() {
-        let value = json!("BoLd");
+    fn rejects_font_weight_token_value_with_invalid_top_level_reference() {
+        let mut ctx = parser_context();
 
-        let (result, ctx) = parse_font_weight(&value);
-
-        assert!(ctx.errors.is_empty());
-
-        let ParseState::Parsed(FontWeightTokenValue(parsed)) = result else {
-            panic!("expected parsed font weight token");
-        };
-
-        assert!(matches!(
-            parsed,
-            RefOr::Literal(FontWeightValue::String(FontWeightValueString::Bold))
-        ));
-    }
-
-    #[test]
-    fn parses_string_synonym_as_canonical_variant() {
-        let value = json!("regular");
-
-        let (result, ctx) = parse_font_weight(&value);
-
-        assert!(ctx.errors.is_empty());
-
-        let ParseState::Parsed(FontWeightTokenValue(parsed)) = result else {
-            panic!("expected parsed font weight token");
-        };
-
-        assert!(matches!(
-            parsed,
-            RefOr::Literal(FontWeightValue::String(FontWeightValueString::Normal))
-        ));
-    }
-
-    #[test]
-    fn parses_empty_string_ref() {
-        let value = json!({ "$ref": "" });
-
-        let (result, ctx) = parse_font_weight(&value);
-
-        assert!(ctx.errors.is_empty());
-
-        let ParseState::Parsed(FontWeightTokenValue(parsed)) = result else {
-            panic!("expected parsed font weight token");
-        };
-
-        assert!(matches!(
-            parsed,
-            RefOr::Ref(JsonRef {
-                raw_value,
-                kind: crate::ir::JsonRefKind::LocalPointer { pointer }
-            }) if raw_value.is_empty() && pointer == JsonPointer::new()
-        ));
-    }
-
-    #[test]
-    fn parses_local_json_pointer_ref() {
-        let value = json!({ "$ref": "#/tokens/typography/body/fontWeight" });
-
-        let (result, ctx) = parse_font_weight(&value);
-
-        assert!(ctx.errors.is_empty());
-
-        let ParseState::Parsed(FontWeightTokenValue(parsed)) = result else {
-            panic!("expected parsed font weight token");
-        };
-
-        assert!(matches!(
-            parsed,
-            RefOr::Ref(JsonRef {
-                raw_value,
-                kind: crate::ir::JsonRefKind::LocalPointer { pointer }
-            }) if raw_value == "#/tokens/typography/body/fontWeight"
-                && pointer == JsonPointer::from("#/tokens/typography/body/fontWeight")
-        ));
-    }
-
-    #[test]
-    fn skips_invalid_font_weight_string() {
-        let value = json!("super-bold");
-
-        let (result, ctx) = parse_font_weight(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Invalid font weight token string value 'super-bold', expected one of the following: thin, hairline, extra-light, ultra-light, light, normal, regular, book, medium, semi-bold, demi-bold, bold, extra-bold, ultra-bold, black, heavy, extra-black, ultra-black"
+        let parsed = FontWeightTokenValue::try_from_json(
+            &mut ctx,
+            "/token",
+            &json!({ "$ref": "not-a-pointer" }),
         );
-        assert_eq!(ctx.errors[0].path, "tokens.typography.body.fontWeight");
-    }
 
-    #[test]
-    fn skips_invalid_value_type() {
-        let value = json!(true);
-
-        let (result, ctx) = parse_font_weight(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Expected font weight token value to be either a number or a string, but found true"
-        );
-        assert_eq!(ctx.errors[0].path, "tokens.typography.body.fontWeight");
-    }
-
-    #[test]
-    fn skips_invalid_ref_pointer() {
-        let value = json!({ "$ref": "tokens/typography/body/fontWeight" });
-
-        let (result, ctx) = parse_font_weight(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
+        assert!(parsed.is_none());
         assert_eq!(ctx.errors.len(), 1);
         assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidReference);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Invalid JSON pointer: tokens/typography/body/fontWeight"
-        );
-        assert_eq!(ctx.errors[0].path, "tokens.typography.body.fontWeight");
+        assert_eq!(ctx.errors[0].path, "/token");
+    }
+
+    #[test]
+    fn rejects_font_weight_token_value_with_invalid_object_shape() {
+        let mut ctx = parser_context();
+
+        let parsed =
+            FontWeightTokenValue::try_from_json(&mut ctx, "/token", &json!({ "weight": 400 }));
+
+        assert!(parsed.is_none());
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidTokenValue);
+        assert_eq!(ctx.errors[0].path, "/token");
     }
 }

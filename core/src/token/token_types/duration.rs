@@ -1,17 +1,7 @@
 //! The `duration` module defines the data structures for duration tokens defined in the DTCG specification,
 //! which represents a duration in the UI, such as the duration of an animation or transition.
 
-use crate::{
-    errors::DiagnosticCode,
-    ir::RefOr,
-    token::{
-        ParseState, TryFromJson, TryFromJsonField,
-        utils::{
-            FieldPresence, FloatOrInteger, parse_field, require_enum_string_with_mapping,
-            require_float_or_integer,
-        },
-    },
-};
+use crate::ir::{JsonNumber, RefOr, TryFromJson, require_enum_string_with_mapping, require_object};
 
 /// The DTCG specification only accepts the "value" property for duration tokens, which is a string,
 /// to be either "ms" for milliseconds or "s" for seconds. This enum represents the unit of the duration token value.
@@ -21,8 +11,8 @@ pub enum DurationUnit {
     S,
 }
 
-impl<'a> TryFromJsonField<'a> for DurationUnit {
-    fn try_from_json_field(
+impl<'a> TryFromJson<'a> for DurationUnit {
+    fn try_from_json(
         ctx: &mut crate::ParserContext,
         path: &str,
         value: &'a serde_json::Value,
@@ -43,15 +33,15 @@ impl<'a> TryFromJsonField<'a> for DurationUnit {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct DurationValue(FloatOrInteger);
+pub struct DurationValue(JsonNumber);
 
-impl<'a> TryFromJsonField<'a> for DurationValue {
-    fn try_from_json_field(
+impl<'a> TryFromJson<'a> for DurationValue {
+    fn try_from_json(
         ctx: &mut crate::ParserContext,
         path: &str,
         value: &'a serde_json::Value,
     ) -> Option<Self> {
-        require_float_or_integer(ctx, path, value).map(DurationValue)
+        JsonNumber::try_from_json(ctx, path, value).map(DurationValue)
     }
 }
 
@@ -69,29 +59,15 @@ impl<'a> TryFromJson<'a> for DurationTokenValue {
         ctx: &mut crate::ParserContext,
         path: &str,
         value: &'a serde_json::Value,
-    ) -> ParseState<Self> {
-        match value {
-            serde_json::Value::Object(map) => {
-                let value =
-                    parse_field::<DurationValue>(ctx, path, map, "value", FieldPresence::Required);
-                let unit =
-                    parse_field::<DurationUnit>(ctx, path, map, "unit", FieldPresence::Required);
+    ) -> Option<Self> {
+        let obj = require_object(ctx, path, value, "duration token")?;
 
-                match (value, unit) {
-                    (Some(value), Some(unit)) => {
-                        ParseState::Parsed(DurationTokenValue { value, unit })
-                    }
-                    _ => ParseState::Skipped, // The errors have already been pushed by parse_field, so we just return Skipped here
-                }
-            }
-            _ => {
-                ctx.push_to_errors(
-                    DiagnosticCode::InvalidPropertyType,
-                    format!("The duration token value should be an object with 'value' and 'unit' properties, but found {}", value),
-                    path.into(),
-                );
-                ParseState::Skipped
-            }
+        let value = obj.required_field::<RefOr<DurationValue>>(ctx, path, "value");
+        let unit = obj.required_field::<RefOr<DurationUnit>>(ctx, path, "unit");
+
+        match (value, unit) {
+            (Some(value), Some(unit)) => Some(DurationTokenValue { value, unit }),
+            _ => None, // The errors have already been pushed by required_field, so we just return None here
         }
     }
 }
@@ -99,168 +75,219 @@ impl<'a> TryFromJson<'a> for DurationTokenValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FileFormat, ParserContext, errors::DiagnosticCode};
-    use serde_json::json;
+    use crate::{
+        FileFormat, ParserContext,
+        errors::DiagnosticCode,
+        ir::{JsonNumber, JsonPointer, JsonRef, RefOr, TryFromJson},
+    };
+    use serde_json::{Number, json};
 
-    fn make_context() -> ParserContext {
-        ParserContext::new(String::from("test.json"), FileFormat::Json, String::new())
-    }
-
-    fn parse_duration(
-        value: &serde_json::Value,
-    ) -> (ParseState<DurationTokenValue>, ParserContext) {
-        let mut ctx = make_context();
-        let result =
-            DurationTokenValue::try_from_json(&mut ctx, "tokens.motion.fast.duration", value);
-        (result, ctx)
+    fn parser_context() -> ParserContext {
+        ParserContext::new("tests.json".into(), FileFormat::Json, String::new())
     }
 
     #[test]
-    fn parses_integer_duration_with_ms_unit() {
+    fn parses_supported_duration_units() {
+        let mut ctx = parser_context();
+
+        let ms = DurationUnit::try_from_json(&mut ctx, "/token/unit", &json!("ms"));
+        let s = DurationUnit::try_from_json(&mut ctx, "/token/unit", &json!("s"));
+
+        assert_eq!(ms, Some(DurationUnit::Ms));
+        assert_eq!(s, Some(DurationUnit::S));
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn rejects_unknown_duration_unit() {
+        let mut ctx = parser_context();
+
+        let unit = DurationUnit::try_from_json(&mut ctx, "/token/unit", &json!("sec"));
+
+        assert_eq!(unit, None);
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidEnumValue);
+        assert_eq!(ctx.errors[0].path, "/token/unit");
+        assert!(ctx.errors[0].message.contains("ms, s"));
+    }
+
+    #[test]
+    fn parses_duration_token_with_literal_fields() {
+        let mut ctx = parser_context();
         let value = json!({
-            "value": 150,
+            "value": 200,
             "unit": "ms"
         });
 
-        let (result, ctx) = parse_duration(&value);
-
-        assert!(ctx.errors.is_empty());
-
-        let ParseState::Parsed(parsed) = result else {
-            panic!("expected duration token to parse successfully");
-        };
+        let parsed = DurationTokenValue::try_from_json(&mut ctx, "/token", &value);
 
         assert_eq!(
-            parsed.value,
-            RefOr::Literal(DurationValue(FloatOrInteger::Integer(150)))
+            parsed,
+            Some(DurationTokenValue {
+                value: RefOr::Literal(DurationValue(JsonNumber(Number::from(200)))),
+                unit: RefOr::Literal(DurationUnit::Ms),
+            })
         );
-        assert!(matches!(parsed.unit, RefOr::Literal(DurationUnit::Ms)));
+        assert!(ctx.errors.is_empty());
     }
 
     #[test]
-    fn parses_float_duration_with_seconds_unit() {
+    fn parses_duration_token_with_references() {
+        let mut ctx = parser_context();
         let value = json!({
-            "value": 0.25,
+            "value": { "$ref": "#/base/animation/value" },
+            "unit": { "$ref": "#/base/animation/unit" }
+        });
+
+        let parsed = DurationTokenValue::try_from_json(&mut ctx, "/token", &value).unwrap();
+
+        match parsed.value {
+            RefOr::Ref(json_ref) => assert_eq!(
+                json_ref,
+                JsonRef::new_local_pointer(
+                    "#/base/animation/value".to_string(),
+                    JsonPointer::from("#/base/animation/value")
+                )
+            ),
+            RefOr::Literal(_) => panic!("expected value field to parse as a reference"),
+        }
+        match parsed.unit {
+            RefOr::Ref(json_ref) => assert_eq!(
+                json_ref,
+                JsonRef::new_local_pointer(
+                    "#/base/animation/unit".to_string(),
+                    JsonPointer::from("#/base/animation/unit")
+                )
+            ),
+            RefOr::Literal(_) => panic!("expected unit field to parse as a reference"),
+        }
+        assert!(ctx.errors.is_empty());
+    }
+
+    #[test]
+    fn reports_missing_required_unit_field() {
+        let mut ctx = parser_context();
+        let value = json!({
+            "value": 250
+        });
+
+        let parsed = DurationTokenValue::try_from_json(&mut ctx, "/token", &value);
+
+        assert_eq!(parsed, None);
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::MissingRequiredProperty);
+        assert_eq!(ctx.errors[0].path, "/token/unit");
+    }
+
+    #[test]
+    fn reports_missing_required_value_field() {
+        let mut ctx = parser_context();
+        let value = json!({
+            "unit": "ms"
+        });
+
+        let parsed = DurationTokenValue::try_from_json(&mut ctx, "/token", &value);
+
+        assert_eq!(parsed, None);
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::MissingRequiredProperty);
+        assert_eq!(ctx.errors[0].path, "/token/value");
+    }
+
+    #[test]
+    fn reports_both_missing_required_fields() {
+        let mut ctx = parser_context();
+        let value = json!({});
+
+        let parsed = DurationTokenValue::try_from_json(&mut ctx, "/token", &value);
+
+        assert_eq!(parsed, None);
+        assert_eq!(ctx.errors.len(), 2);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::MissingRequiredProperty);
+        assert_eq!(ctx.errors[0].path, "/token/value");
+        assert_eq!(ctx.errors[1].code, DiagnosticCode::MissingRequiredProperty);
+        assert_eq!(ctx.errors[1].path, "/token/unit");
+    }
+
+    #[test]
+    fn parses_negative_fractional_duration_value() {
+        let mut ctx = parser_context();
+        let value = json!({
+            "value": -0.5,
             "unit": "s"
         });
 
-        let (result, ctx) = parse_duration(&value);
-
-        assert!(ctx.errors.is_empty());
-
-        let ParseState::Parsed(parsed) = result else {
-            panic!("expected duration token to parse successfully");
-        };
+        let parsed = DurationTokenValue::try_from_json(&mut ctx, "/token", &value);
 
         assert_eq!(
-            parsed.value,
-            RefOr::Literal(DurationValue(FloatOrInteger::Float(0.25)))
+            parsed,
+            Some(DurationTokenValue {
+                value: RefOr::Literal(DurationValue(JsonNumber(Number::from_f64(-0.5).unwrap()))),
+                unit: RefOr::Literal(DurationUnit::S),
+            })
         );
-        assert!(matches!(parsed.unit, RefOr::Literal(DurationUnit::S)));
+        assert!(ctx.errors.is_empty());
     }
 
     #[test]
-    fn parses_negative_duration_value() {
+    fn reports_invalid_top_level_shape() {
+        let mut ctx = parser_context();
+
+        let parsed = DurationTokenValue::try_from_json(&mut ctx, "/token", &json!(250));
+
+        assert_eq!(parsed, None);
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
+        assert_eq!(ctx.errors[0].path, "/token");
+    }
+
+    #[test]
+    fn reports_invalid_unit_type() {
+        let mut ctx = parser_context();
         let value = json!({
-            "value": -50,
+            "value": 250,
+            "unit": 2
+        });
+
+        let parsed = DurationTokenValue::try_from_json(&mut ctx, "/token", &value);
+
+        assert_eq!(parsed, None);
+        assert_eq!(ctx.errors.len(), 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
+        assert_eq!(ctx.errors[0].path, "/token/unit");
+    }
+
+    #[test]
+    fn reports_invalid_reference_value_field() {
+        let mut ctx = parser_context();
+        let value = json!({
+            "value": { "$ref": "not-a-pointer" },
             "unit": "ms"
         });
 
-        let (result, ctx) = parse_duration(&value);
+        let parsed = DurationTokenValue::try_from_json(&mut ctx, "/token", &value);
 
-        assert!(ctx.errors.is_empty());
-
-        let ParseState::Parsed(parsed) = result else {
-            panic!("expected duration token to parse successfully");
-        };
-
-        assert_eq!(
-            parsed.value,
-            RefOr::Literal(DurationValue(FloatOrInteger::Integer(-50)))
-        );
-        assert!(matches!(parsed.unit, RefOr::Literal(DurationUnit::Ms)));
-    }
-
-    #[test]
-    fn skips_when_required_unit_is_missing() {
-        let value = json!({
-            "value": 100
-        });
-
-        let (result, ctx) = parse_duration(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
+        assert_eq!(parsed, None);
         assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::MissingRequiredProperty);
-        assert_eq!(ctx.errors[0].message, "Missing required field: unit");
-        assert_eq!(ctx.errors[0].path, "tokens.motion.fast.duration");
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidReference);
+        assert_eq!(ctx.errors[0].path, "/token/value");
     }
 
     #[test]
-    fn skips_when_both_required_fields_are_missing() {
-        let value = json!({});
-
-        let (result, ctx) = parse_duration(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 2);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::MissingRequiredProperty);
-        assert_eq!(ctx.errors[0].message, "Missing required field: value");
-        assert_eq!(ctx.errors[1].code, DiagnosticCode::MissingRequiredProperty);
-        assert_eq!(ctx.errors[1].message, "Missing required field: unit");
-    }
-
-    #[test]
-    fn skips_when_value_and_unit_are_invalid() {
+    fn reports_invalid_value_and_unit_fields() {
+        let mut ctx = parser_context();
         let value = json!({
-            "value": "100",
+            "value": "fast",
             "unit": "minutes"
         });
 
-        let (result, ctx) = parse_duration(&value);
+        let parsed = DurationTokenValue::try_from_json(&mut ctx, "/token", &value);
 
-        assert!(matches!(result, ParseState::Skipped));
+        assert_eq!(parsed, None);
         assert_eq!(ctx.errors.len(), 2);
         assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
-        assert_eq!(
-            ctx.errors[0].message,
-            "Expected a number, but found: \"100\""
-        );
+        assert_eq!(ctx.errors[0].path, "/token/value");
         assert_eq!(ctx.errors[1].code, DiagnosticCode::InvalidEnumValue);
-        assert_eq!(
-            ctx.errors[1].message,
-            "Expected one of ms, s for the field 'unit', but got 'minutes'"
-        );
-    }
-
-    #[test]
-    fn skips_when_unit_has_wrong_json_type() {
-        let value = json!({
-            "value": 100,
-            "unit": true
-        });
-
-        let (result, ctx) = parse_duration(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
-        assert_eq!(ctx.errors[0].message, "Expected a string, but found: true");
-    }
-
-    #[test]
-    fn skips_when_value_is_not_an_object() {
-        let value = json!("150ms");
-
-        let (result, ctx) = parse_duration(&value);
-
-        assert!(matches!(result, ParseState::Skipped));
-        assert_eq!(ctx.errors.len(), 1);
-        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyType);
-        assert_eq!(
-            ctx.errors[0].message,
-            "The duration token value should be an object with 'value' and 'unit' properties, but found \"150ms\""
-        );
-        assert_eq!(ctx.errors[0].path, "tokens.motion.fast.duration");
+        assert_eq!(ctx.errors[1].path, "/token/unit");
     }
 }

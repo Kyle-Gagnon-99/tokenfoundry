@@ -3,6 +3,7 @@
 
 pub mod common;
 pub mod ids;
+pub mod json;
 pub mod node;
 pub mod path;
 pub mod reference;
@@ -10,6 +11,7 @@ pub mod utility;
 
 pub use common::*;
 pub use ids::*;
+pub use json::*;
 pub use node::*;
 pub use path::*;
 pub use reference::*;

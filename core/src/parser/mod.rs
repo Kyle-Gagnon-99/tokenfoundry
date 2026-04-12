@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::{ParserContext, errors::DiagnosticCode};
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 pub enum RawNode {
@@ -58,8 +60,25 @@ pub struct RawGroup {
     pub children: BTreeMap<String, RawNode>,
 }
 
+pub fn parse_document(ctx: &mut ParserContext) {
+    let root_node: RawNode = match serde_json::from_str(&ctx.file_content) {
+        Ok(node) => node,
+        Err(e) => {
+            ctx.push_to_errors(
+                DiagnosticCode::Other,
+                format!("Failed to parse JSON: {}", e),
+                "/".to_string(),
+            );
+            return;
+        }
+    };
+    print!("Parsed root node: {:#?}", root_node);
+}
+
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
@@ -135,5 +154,57 @@ mod tests {
             serde_json::Value::String(String::from("blue"))
         );
         assert_eq!(child_token.token_type.as_ref().unwrap(), "color");
+    }
+
+    #[test]
+    fn test_missing_required_fields() {
+        let json = json!({
+            "$description": "A token missing required fields"
+        });
+
+        match serde_json::from_str::<RawToken>(json.to_string().as_str()) {
+            Ok(_) => panic!("Expected deserialization to fail due to missing required fields"),
+            Err(e) => assert!(e.to_string().contains("missing field `$value`")),
+        }
+    }
+
+    #[test]
+    fn test_json_parses_to_correct_token_type() {
+        let json = json!({
+            "$value": "16px",
+            "$type": "dimension"
+        });
+
+        match serde_json::from_str::<RawNode>(json.to_string().as_str()) {
+            Ok(RawNode::Group(_)) => panic!("Expected a token node, but got a group node"),
+            Ok(RawNode::Token(token)) => {
+                assert_eq!(token.token_type.as_ref().unwrap(), "dimension");
+                assert_eq!(token.value, serde_json::Value::String(String::from("16px")));
+            }
+            Err(e) => panic!("Deserialization failed: {}", e),
+        }
+
+        let json = json!({
+            "$description": "A token without a type field",
+            "token-name": {
+                "$type": "color",
+                "$value": "blue"
+            }
+        });
+
+        match serde_json::from_str::<RawNode>(json.to_string().as_str()) {
+            Ok(RawNode::Group(group)) => {
+                let token_node = group.children.get("token-name").unwrap();
+                match token_node {
+                    RawNode::Token(token) => {
+                        assert_eq!(token.token_type.as_ref().unwrap(), "color");
+                        assert_eq!(token.value, serde_json::Value::String(String::from("blue")));
+                    }
+                    _ => panic!("Expected a token node"),
+                }
+            }
+            Ok(RawNode::Token(_)) => panic!("Expected a group node, but got a token node"),
+            Err(e) => panic!("Deserialization failed: {}", e),
+        }
     }
 }

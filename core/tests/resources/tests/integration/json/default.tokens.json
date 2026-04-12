@@ -1,0 +1,13 @@
+{
+    "$schema": "../../../../../../dtcg_shemas/format.json",
+    "color": {
+        "primary": {
+            "$type": "color",
+            "$description": "The primary color",
+            "$value": {
+                "colorSpace": "hsl",
+                "components": [208, 1, 0.6]
+            }
+        }
+    }
+}

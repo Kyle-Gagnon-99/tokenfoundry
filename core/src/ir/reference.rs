@@ -2,7 +2,7 @@
 
 use regex::Regex;
 
-use crate::ir::TokenPath;
+use crate::ir::{TokenPath, TryFromJson, parse_ref_or_value, require_string};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TokenAlias {
@@ -58,7 +58,7 @@ impl TokenAlias {
     /// use tokenfoundry_core::ir::TokenAlias;
     ///
     /// let raw_value = "{group1.subgroupA.tokenX}".to_string();
-    /// if let Some(alias) = TokenAlias::from_dtcg_alias(raw_value) {
+    /// if let Some(alias) = TokenAlias::from_dtcg_alias(&raw_value) {
     ///     println!("Created TokenAlias: {:?}", alias);
     /// } else {
     ///     println!("Invalid DTCG alias format");
@@ -78,6 +78,17 @@ impl TokenAlias {
             // If the raw value is not a valid DTCG alias, return None
             None
         }
+    }
+}
+
+impl<'a> TryFromJson<'a> for TokenAlias {
+    fn try_from_json(
+        ctx: &mut crate::ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        let str_val = require_string(ctx, path, value)?;
+        Self::from_dtcg_alias(str_val)
     }
 }
 
@@ -170,38 +181,54 @@ impl From<String> for JsonPointer {
     }
 }
 
-/// The `JsonRefKind` enum represents the different kinds of JSON references that can be used in the IR to reference other tokens or values
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum JsonRefKind {
-    LocalPointer {
-        pointer: JsonPointer,
-    },
-    RelativeFile {
-        file: String,
-        pointer: Option<JsonPointer>,
-    },
-    AbsoluteFile {
-        file: String,
-        pointer: Option<JsonPointer>,
-    },
+impl From<&String> for JsonPointer {
+    fn from(value: &String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+impl<'a> TryFromJson<'a> for JsonPointer {
+    fn try_from_json(
+        ctx: &mut crate::ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        let str_val = require_string(ctx, path, value)?;
+        Some(Self::from(str_val))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct JsonRef {
+pub struct JsonLocalPointer {
     pub raw_value: String,
-    pub kind: JsonRefKind,
+    pub pointer: JsonPointer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct JsonRelativeFilePointer {
+    pub raw_value: String,
+    pub file: String,
+    pub pointer: Option<JsonPointer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct JsonAbsoluteFilePointer {
+    pub raw_value: String,
+    pub file: String,
+    pub pointer: Option<JsonPointer>,
+}
+
+/// The `JsonRefKind` enum represents the different kinds of JSON references that can be used in the IR to reference other tokens or values
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum JsonRef {
+    LocalPointer(JsonLocalPointer),
+    RelativeFile(JsonRelativeFilePointer),
+    AbsoluteFile(JsonAbsoluteFilePointer),
 }
 
 impl JsonRef {
-    pub fn new(raw_value: String, kind: JsonRefKind) -> Self {
-        Self { raw_value, kind }
-    }
-
     pub fn new_local_pointer(raw_value: String, pointer: JsonPointer) -> Self {
-        Self {
-            raw_value,
-            kind: JsonRefKind::LocalPointer { pointer },
-        }
+        JsonRef::LocalPointer(JsonLocalPointer { raw_value, pointer })
     }
 }
 
@@ -238,5 +265,47 @@ impl<T> RefOr<T> {
     /// A `RefOr` instance containing the provided `JsonRef`, which can be used to represent a property value that references another token or value in the IR.
     pub fn from_ref(json_ref: JsonRef) -> Self {
         RefOr::Ref(json_ref)
+    }
+
+    /// Checks if the `RefOr` instance contains a literal value of type `T`
+    ///
+    /// # Returns
+    ///
+    /// `true` if the `RefOr` instance is a `Literal`, `false` if it is a `Ref`.
+    pub fn is_literal(&self) -> bool {
+        matches!(self, RefOr::Literal(_))
+    }
+
+    /// Checks if the `RefOr` instance contains a reference to another token or value in the IR using a `JsonRef`
+    ///
+    /// # Returns
+    ///
+    /// `true` if the `RefOr` instance is a `Ref`, `false` if it is a `Literal`.
+    pub fn is_ref(&self) -> bool {
+        matches!(self, RefOr::Ref(_))
+    }
+
+    /// Unwraps the `RefOr` instance and returns a reference to the literal value of type `T` if it is a `Literal`, or `None` if it is a `Ref`
+    ///
+    /// # Returns
+    ///
+    /// An `Option<&T>` which will contain a reference to the literal value of type `T` if the `RefOr` instance is a `Literal`, or `None` if it is a
+    /// `Ref`, indicating that the value is a reference to another token or value in the IR rather than a literal value.
+    pub fn as_literal(&self) -> Option<&T> {
+        if let RefOr::Literal(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a, T: TryFromJson<'a>> TryFromJson<'a> for RefOr<T> {
+    fn try_from_json(
+        ctx: &mut crate::ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> Option<Self> {
+        parse_ref_or_value(ctx, path, value)
     }
 }
