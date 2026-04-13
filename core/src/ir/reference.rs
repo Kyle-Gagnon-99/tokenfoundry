@@ -1,8 +1,9 @@
 //! The `reference` module contains the defintions and logic for referencing and aliasing
 
-use regex::Regex;
-
-use crate::ir::{TokenPath, TryFromJson, parse_ref_or_value, require_string};
+use crate::{
+    errors::DiagnosticCode,
+    ir::{ParseState, TokenPath, TryFromJson},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TokenAlias {
@@ -86,9 +87,41 @@ impl<'a> TryFromJson<'a> for TokenAlias {
         ctx: &mut crate::ParserContext,
         path: &str,
         value: &'a serde_json::Value,
-    ) -> Option<Self> {
-        let str_val = require_string(ctx, path, value)?;
-        Self::from_dtcg_alias(str_val)
+    ) -> ParseState<Self> {
+        // Check if it is a string, if so, continue, if not, probably not meant for us, so return NoMatch and let other parsers try to parse it
+        let s = match value {
+            serde_json::Value::String(s) => s,
+            _ => return ParseState::NoMatch,
+        };
+
+        // It is a string, so check if it starts with '{', if so continue, if not, probably not meant for us, so return NoMatch and let other parsers try to parse it
+        if !s.starts_with('{') {
+            return ParseState::NoMatch;
+        }
+
+        // If it does not end with '}', then it is not a valid alias, so push an error to the context and return Invalid
+        // If it is a string that starts with '{' it is likely meant to be a DTCG alias, so we should push an error if it does not end with '}'
+        if !s.ends_with('}') {
+            ctx.push_to_errors(
+                DiagnosticCode::InvalidReference,
+                format!("Invalid DTCG alias format: {}", s),
+                path.into(),
+            );
+            return ParseState::Invalid;
+        }
+
+        // It is a string that starts with '{' and ends with '}', so we will try to parse it as a DTCG alias
+        match Self::from_dtcg_alias(s) {
+            Some(alias) => ParseState::Parsed(alias),
+            None => {
+                ctx.push_to_errors(
+                    DiagnosticCode::InvalidReference,
+                    format!("Invalid DTCG alias format: {}", s),
+                    path.into(),
+                );
+                return ParseState::Invalid;
+            }
+        }
     }
 }
 
@@ -117,7 +150,7 @@ impl JsonPointer {
     ///
     /// # Arguments
     ///
-    /// - `segments` - An iterator of items that can be converted into strings, representing the segments of the pointer, ordered from the root of the JSON document to the specific value
+    /// * `segments` - An iterator of items that can be converted into strings, representing the segments of the pointer, ordered from the root of the JSON document to the specific value
     ///
     /// # Returns
     ///
@@ -139,122 +172,210 @@ impl JsonPointer {
         }
     }
 
-    /// Checks if a given string is a valid JSON Pointer according to the JSON Pointer specification (RFC 6901)
-    ///
-    /// Supports both normal JSON pointers and URI fragment identifiers (which start with a '#' character followed by a JSON pointer)
-    ///
-    /// # Arguments
-    ///
-    /// - `s` - The string to be checked for validity as a JSON Pointer
+    /// Checks if the `JsonPointer` is a root pointer, which means it has no segments and points to the root of the JSON document
     ///
     /// # Returns
     ///
-    /// `true` if the input string is a valid JSON Pointer according to the specification, `false` otherwise.
-    pub fn is_valid_local_json_pointer(s: &str) -> bool {
-        // Create a regular expression to match valid JSON Pointers according to RFC 6901
-        // A valid JSON Pointer is either an empty string or a string that starts with a '/'
-        // followed by zero or more segments, where each segment can contain any characters except for '~' and '/'
-        // Additionally, we also want to support URI fragment identifiers, which start with a '#' character followed by a JSON Pointer
-        let re = Regex::new(r"^(#)?(/([^/~]|~0|~1)*)*$").unwrap();
-        re.is_match(s)
+    /// `true` if the `JsonPointer` has no segments and points to the root of the JSON document, `false` otherwise.
+    pub fn is_root(&self) -> bool {
+        self.segments.is_empty()
     }
-}
 
-impl From<&str> for JsonPointer {
-    fn from(value: &str) -> Self {
-        // First, we split the input string by the '/' character to get the individual segments of the JSON Pointer
-        let segments = value
-            .split('/')
-            // We filter out any empty segments that may result from leading or trailing '/' characters
-            .filter(|segment| !segment.is_empty())
-            // We unescape any escaped characters in the segments according to the JSON Pointer specification
-            .map(|segment| segment.replace("~1", "/").replace("~0", "~"))
-            // We collect the resulting segments into a vector of strings
-            .collect();
-        Self { segments }
+    /// Converts the `JsonPointer` into its string representation, which is a JSON Pointer string that can be used to reference a specific value within a JSON document.
+    /// The string representation of a JSON Pointer consists of segments separated by '/', with a leading '/' to indicate the
+    /// root of the JSON document. For example, a `JsonPointer` with segments ["group1", "subgroupA", "tokenX"] would be represented as "/group1/subgroupA/tokenX".
+    /// If the `JsonPointer` has no segments (i.e., it is a root pointer), it is represented as "/".
+    ///
+    /// # Returns
+    ///
+    /// A string representation of the `JsonPointer` that can be used to reference a specific value within a JSON document.
+    /// For example, a `JsonPointer` with segments ["group1", "subgroupA", "tokenX"] would be represented as "/group1/subgroupA/tokenX", and a root pointer
+    /// with no segments would be represented as "/".
+    pub fn to_string(&self) -> String {
+        if self.segments.is_empty() {
+            "/".to_string() // The root pointer is represented as "/"
+        } else {
+            format!("/{}", self.segments.join("/"))
+        }
     }
-}
-
-impl From<String> for JsonPointer {
-    fn from(value: String) -> Self {
-        Self::from(value.as_str())
-    }
-}
-
-impl From<&String> for JsonPointer {
-    fn from(value: &String) -> Self {
-        Self::from(value.as_str())
-    }
-}
-
-impl<'a> TryFromJson<'a> for JsonPointer {
-    fn try_from_json(
-        ctx: &mut crate::ParserContext,
-        path: &str,
-        value: &'a serde_json::Value,
-    ) -> Option<Self> {
-        let str_val = require_string(ctx, path, value)?;
-        Some(Self::from(str_val))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct JsonLocalPointer {
-    pub raw_value: String,
-    pub pointer: JsonPointer,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct JsonRelativeFilePointer {
-    pub raw_value: String,
-    pub file: String,
-    pub pointer: Option<JsonPointer>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct JsonAbsoluteFilePointer {
-    pub raw_value: String,
-    pub file: String,
-    pub pointer: Option<JsonPointer>,
 }
 
 /// The `JsonRefKind` enum represents the different kinds of JSON references that can be used in the IR to reference other tokens or values
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum JsonRef {
-    LocalPointer(JsonLocalPointer),
-    RelativeFile(JsonRelativeFilePointer),
-    AbsoluteFile(JsonAbsoluteFilePointer),
+pub struct JsonRef {
+    pub document: Option<String>,
+    pub pointer: JsonPointer,
 }
 
 impl JsonRef {
-    pub fn new_local_pointer(raw_value: String, pointer: JsonPointer) -> Self {
-        JsonRef::LocalPointer(JsonLocalPointer { raw_value, pointer })
+    fn parse_local_pointer(pointer_str: &str) -> Option<JsonPointer> {
+        // Check if the pointer string starts with a '/'. If not, we will add it to ensure it is a valid JSON pointer format
+        let pointer_str = if pointer_str.starts_with('/') {
+            pointer_str.to_string()
+        } else {
+            format!("/{}", pointer_str)
+        };
+
+        // Split the pointer string by '/' to get the individual segments of the JSON pointer
+        let segments: Vec<String> = pointer_str
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect();
+
+        // Create a JsonPointer from the segments
+        Some(JsonPointer::from_segments(segments))
+    }
+
+    /// Parses a JSON reference string into a `JsonRef` struct, if the string is in a valid format.
+    /// The expected format for the reference string is either a JSON pointer with URI fragment support:
+    ///     - `#/path/to/value` (for references within the same document)
+    ///     - `/path/to/value` (for references within the same document, without the leading '#')
+    ///     - `document.json#/path/to/value` (for references to another document, with the document name followed by a JSON pointer)
+    ///     - `document.json` (for references to another document, without a JSON pointer, which would point to the root of that document)
+    ///
+    /// # Arguments
+    ///
+    /// - `ref_str` - A string representing the JSON reference to be parsed into a `JsonRef` struct
+    ///
+    /// # Returns
+    ///
+    /// An `Option<JsonRef>` which will contain a `JsonRef` struct if the provided reference string is in a valid format and can be successfully parsed, or `None` if the
+    /// reference string is not in a valid format and cannot be parsed into a `JsonRef` struct.
+    pub fn parse(ref_str: &str) -> Option<Self> {
+        // First, check if the reference string starts with a '#' character, which indicates that it is a JSON pointer reference within the same document
+        if ref_str.starts_with('#') {
+            // Remove the leading '#' character to get the JSON pointer string
+            let pointer_str = &ref_str[1..];
+
+            // Create a JsonPointer from the segments
+            let pointer = Self::parse_local_pointer(pointer_str)?;
+
+            // Return a JsonRef with no document (since it's a reference within the same document) and the parsed pointer
+            Some(JsonRef {
+                document: None,
+                pointer,
+            })
+        } else if ref_str.contains('#') {
+            // It contains a '#' character, which indicates that it is a reference
+            // Split on '#'. If there are more than 2 parts, it's an invalid format
+            let parts: Vec<&str> = ref_str.split('#').collect();
+            if parts.len() != 2 {
+                return None;
+            }
+
+            let document = parts[0].to_string();
+            let pointer_str = parts[1];
+            let pointer = Self::parse_local_pointer(pointer_str)?;
+            Some(JsonRef {
+                document: Some(document),
+                pointer,
+            })
+        } else if ref_str.starts_with('/') {
+            // It starts with a '/', which indicates that it is a JSON pointer reference within the same document (without the leading '#')
+            let pointer_str = ref_str;
+            let pointer = Self::parse_local_pointer(pointer_str)?;
+            Some(JsonRef {
+                document: None,
+                pointer,
+            })
+        } else {
+            // It does not contain a '#' character and does not start with a '/', which indicates that it is a reference to another document without a JSON pointer (pointing to the root of that document)
+            Some(JsonRef {
+                document: Some(ref_str.to_string()),
+                pointer: JsonPointer::new(), // An empty JsonPointer represents the root of the document
+            })
+        }
+    }
+}
+
+impl<'a> TryFromJson<'a> for JsonRef {
+    fn try_from_json(
+        _ctx: &mut crate::ParserContext,
+        _path: &str,
+        value: &'a serde_json::Value,
+    ) -> ParseState<Self> {
+        let ref_val = match value {
+            serde_json::Value::String(s) => s,
+            _ => return ParseState::NoMatch,
+        };
+
+        let json_ref = match Self::parse(ref_val) {
+            Some(json_ref) => json_ref,
+            None => return ParseState::NoMatch,
+        };
+
+        ParseState::Parsed(json_ref)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct JsonRefObject {
+    pub reference: JsonRef,
+}
+
+impl<'a> TryFromJson<'a> for JsonRefObject {
+    fn try_from_json(
+        ctx: &mut crate::ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> ParseState<Self> {
+        let json_ref_obj = match value {
+            serde_json::Value::Object(obj) => obj,
+            _ => return ParseState::NoMatch,
+        };
+
+        // If the object does not contain a "$ref" property, then it is not a JsonRefObject
+        if !json_ref_obj.contains_key("$ref") {
+            return ParseState::NoMatch;
+        }
+
+        // It does contain a "$ref" property, but if there are other properties in the object, then it is an invalid format for a JsonRefObject
+        // so we will push an error to the context and return Invalid
+        if json_ref_obj.len() != 1 {
+            ctx.push_to_errors(
+                DiagnosticCode::InvalidReference,
+                format!("Invalid JsonRefObject format: expected only a '$ref' property, but found additional properties: {:?}", json_ref_obj),
+                path.into(),
+            );
+            return ParseState::Invalid;
+        }
+
+        // It is an object that contains only a "$ref" property, so we will try to parse the value of the "$ref" property as a JsonRef
+        let ref_value = &json_ref_obj["$ref"];
+        match JsonRef::try_from_json(ctx, &format!("{}/{}", path, "$ref"), ref_value) {
+            ParseState::Parsed(json_ref) => ParseState::Parsed(Self {
+                reference: json_ref,
+            }),
+            ParseState::Invalid => ParseState::Invalid,
+            ParseState::NoMatch => ParseState::Invalid, // If the value of the "$ref" property cannot be parsed as a JsonRef, then it is an invalid format for a JsonRefObject, so we will return Invalid
+        }
     }
 }
 
 /// The `RefOr` enum represents a property value that can either be a literal value of type `T` or a reference
 /// to another token or value in the IR using a `JsonRef`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum RefOr<T> {
+pub enum RefOrLiteral<T> {
     Literal(T),
-    Ref(JsonRef),
+    Ref(JsonRefObject),
 }
 
-impl<T> RefOr<T> {
-    /// Creates a new `RefOr` instance representing a literal value of type `T`
+impl<T> RefOrLiteral<T> {
+    /// Creates a new `RefOrLiteral` instance representing a literal value of type `T`
     ///
     /// # Arguments
     ///
-    /// - `value` - The literal value of type `T` to be wrapped in the `RefOr` enum
+    /// - `value` - The literal value of type `T` to be wrapped in the `RefOrLiteral` enum
     ///
     /// # Returns
     ///
-    /// A `RefOr` instance containing the provided literal value, which can be used to represent a property value that is directly specified as a literal in the IR.
+    /// A `RefOrLiteral` instance containing the provided literal value, which can be used to represent a property value that is directly specified as a literal in the IR.
     pub fn from_literal(value: T) -> Self {
-        RefOr::Literal(value)
+        Self::Literal(value)
     }
 
-    /// Creates a new `RefOr` instance representing a reference to another token or value in the IR using a `JsonRef`
+    /// Creates a new `RefOrLiteral` instance representing a reference to another token or value in the IR using a `JsonRef`
     ///
     /// # Arguments
     ///
@@ -262,37 +383,37 @@ impl<T> RefOr<T> {
     ///
     /// # Returns
     ///
-    /// A `RefOr` instance containing the provided `JsonRef`, which can be used to represent a property value that references another token or value in the IR.
-    pub fn from_ref(json_ref: JsonRef) -> Self {
-        RefOr::Ref(json_ref)
+    /// A `RefOrLiteral` instance containing the provided `JsonRefObject`, which can be used to represent a property value that references another token or value in the IR.
+    pub fn from_ref(json_ref: JsonRefObject) -> Self {
+        Self::Ref(json_ref)
     }
 
     /// Checks if the `RefOr` instance contains a literal value of type `T`
     ///
     /// # Returns
     ///
-    /// `true` if the `RefOr` instance is a `Literal`, `false` if it is a `Ref`.
+    /// `true` if the `RefOrLiteral` instance is a `Literal`, `false` if it is a `Ref`.
     pub fn is_literal(&self) -> bool {
-        matches!(self, RefOr::Literal(_))
+        matches!(self, Self::Literal(_))
     }
 
-    /// Checks if the `RefOr` instance contains a reference to another token or value in the IR using a `JsonRef`
+    /// Checks if the `RefOrLiteral` instance contains a reference to another token or value in the IR using a `JsonRef`
     ///
     /// # Returns
     ///
-    /// `true` if the `RefOr` instance is a `Ref`, `false` if it is a `Literal`.
+    /// `true` if the `RefOrLiteral` instance is a `Ref`, `false` if it is a `Literal`.
     pub fn is_ref(&self) -> bool {
-        matches!(self, RefOr::Ref(_))
+        matches!(self, Self::Ref(_))
     }
 
-    /// Unwraps the `RefOr` instance and returns a reference to the literal value of type `T` if it is a `Literal`, or `None` if it is a `Ref`
+    /// Unwraps the `RefOrLiteral` instance and returns a reference to the literal value of type `T` if it is a `Literal`, or `None` if it is a `Ref`
     ///
     /// # Returns
     ///
-    /// An `Option<&T>` which will contain a reference to the literal value of type `T` if the `RefOr` instance is a `Literal`, or `None` if it is a
+    /// An `Option<&T>` which will contain a reference to the literal value of type `T` if the `RefOrLiteral` instance is a `Literal`, or `None` if it is a
     /// `Ref`, indicating that the value is a reference to another token or value in the IR rather than a literal value.
     pub fn as_literal(&self) -> Option<&T> {
-        if let RefOr::Literal(value) = self {
+        if let Self::Literal(value) = self {
             Some(value)
         } else {
             None
@@ -300,12 +421,112 @@ impl<T> RefOr<T> {
     }
 }
 
-impl<'a, T: TryFromJson<'a>> TryFromJson<'a> for RefOr<T> {
+impl<'a, T: TryFromJson<'a>> TryFromJson<'a> for RefOrLiteral<T> {
     fn try_from_json(
         ctx: &mut crate::ParserContext,
         path: &str,
         value: &'a serde_json::Value,
-    ) -> Option<Self> {
-        parse_ref_or_value(ctx, path, value)
+    ) -> ParseState<Self> {
+        // First, we will try to parse the value as a reference using the JsonRef parser
+        match JsonRefObject::try_from_json(ctx, path, value) {
+            ParseState::Parsed(json_ref) => return ParseState::Parsed(Self::from_ref(json_ref)),
+            ParseState::Invalid => return ParseState::Invalid,
+            ParseState::NoMatch => {
+                // If it does not match the JsonRef parser, we will try to parse it as a literal value of type T
+                match T::try_from_json(ctx, path, value) {
+                    ParseState::Parsed(literal) => ParseState::Parsed(Self::from_literal(literal)),
+                    ParseState::Invalid => ParseState::Invalid,
+                    ParseState::NoMatch => ParseState::NoMatch,
+                }
+            }
+        }
+    }
+}
+
+pub enum RefAliasOrLiteral<T> {
+    Alias(TokenAlias),
+    Ref(JsonRefObject),
+    Literal(T),
+}
+
+impl<'a, T: TryFromJson<'a>> TryFromJson<'a> for RefAliasOrLiteral<T> {
+    fn try_from_json(
+        ctx: &mut crate::ParserContext,
+        path: &str,
+        value: &'a serde_json::Value,
+    ) -> ParseState<Self> {
+        // First, attempt the value as a TokenAlias
+        match TokenAlias::try_from_json(ctx, path, value) {
+            ParseState::Parsed(alias) => return ParseState::Parsed(Self::Alias(alias)),
+            ParseState::Invalid => return ParseState::Invalid,
+            ParseState::NoMatch => {
+                // If it does not match the TokenAlias parser, we will try to parse it as a reference using the JsonRefObject parser
+                match JsonRefObject::try_from_json(ctx, path, value) {
+                    ParseState::Parsed(json_ref) => return ParseState::Parsed(Self::Ref(json_ref)),
+                    ParseState::Invalid => return ParseState::Invalid,
+                    ParseState::NoMatch => {
+                        // If it does not match the JsonRef parser, we will try to parse it as a literal value of type T
+                        match T::try_from_json(ctx, path, value) {
+                            ParseState::Parsed(literal) => {
+                                ParseState::Parsed(Self::Literal(literal))
+                            }
+                            // The caller will likely want to error if Invalid or NoMatch is returned from the literal parser,
+                            // since that means the value is not a valid literal and also not a valid reference or alias
+                            ParseState::Invalid => ParseState::Invalid,
+                            ParseState::NoMatch => ParseState::Invalid,
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_json_ref_parse() {
+        let ref_str = "#/group1/subgroupA/tokenX";
+        let json_ref = JsonRef::parse(ref_str).expect("Failed to parse JSON reference");
+        assert_eq!(json_ref.document, None);
+        assert_eq!(
+            json_ref.pointer,
+            JsonPointer::from_segments(vec!["group1", "subgroupA", "tokenX"])
+        );
+
+        let ref_str_with_doc = "document.json#/group1/subgroupA/tokenX";
+        let json_ref_with_doc =
+            JsonRef::parse(ref_str_with_doc).expect("Failed to parse JSON reference with document");
+        assert_eq!(
+            json_ref_with_doc.document,
+            Some("document.json".to_string())
+        );
+        assert_eq!(
+            json_ref_with_doc.pointer,
+            JsonPointer::from_segments(vec!["group1", "subgroupA", "tokenX"])
+        );
+
+        let ref_str_without_pointer = "document.json";
+        let json_ref_without_pointer = JsonRef::parse(ref_str_without_pointer)
+            .expect("Failed to parse JSON reference without pointer");
+        assert_eq!(
+            json_ref_without_pointer.document,
+            Some("document.json".to_string())
+        );
+        assert_eq!(json_ref_without_pointer.pointer, JsonPointer::new());
+
+        let invalid_ref_str = "invalid_ref";
+        let invalid_json_ref = JsonRef::parse(invalid_ref_str);
+        assert!(
+            invalid_json_ref.is_some(),
+            "Expected to parse reference to another document without pointer, but got None"
+        );
+        let invalid_json_ref = JsonRef::parse("invalid#ref#string");
+        assert!(
+            invalid_json_ref.is_none(),
+            "Expected to fail parsing invalid reference string with multiple '#' characters, but got Some"
+        );
     }
 }

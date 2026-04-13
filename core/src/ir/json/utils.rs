@@ -1,6 +1,10 @@
 //! The `utils` module in `json` contains utility functions for parsing JSON values into IR data structures, with error handling
 
-use crate::{ParserContext, errors::DiagnosticCode, ir::JsonObject};
+use crate::{
+    ParserContext,
+    errors::DiagnosticCode,
+    ir::{JsonObject, ParseState},
+};
 
 /// Utility function to require a JSON value to be an object, and return it as a `JsonObject` if it is,
 /// or push an error to the `ParserContext` if it is not.
@@ -208,5 +212,26 @@ pub fn require_enum_string_with_mapping<'a, T>(
             );
             None
         }
+    }
+}
+
+/// Utility function to parse a JSON value as a string and return it as a `ParseState<String>`
+/// If the value is not a string, it returns `ParseState::NoMatch`. This function is useful
+/// when parsing a JSON value that could be a string, but we don't want to treat it as an error if it's not.
+/// Callers may treat `ParseState::NoMatch` as either an error or simply an indication that the value is not present, depending on the context of the parsing logic.
+///
+/// The lifetime annotations indicate that the returned string reference is tied to the lifetime of the input JSON value (which is usually the case).
+///
+/// # Arguments
+///
+/// * `value` - The JSON value to parse as a string
+///
+/// # Returns
+///
+/// Returns `ParseState::Parsed(&String)` if the value is a string, or `ParseState::NoMatch` if the value is not a string.
+pub fn parse_string<'a>(value: &'a serde_json::Value) -> ParseState<&'a String> {
+    match value {
+        serde_json::Value::String(s) => ParseState::Parsed(s),
+        _ => ParseState::NoMatch,
     }
 }

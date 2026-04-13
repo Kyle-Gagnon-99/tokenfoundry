@@ -1,14 +1,16 @@
 //! The `json` module provides IR data structures for JSON values
 
-use crate::{
-    ParserContext,
-    errors::DiagnosticCode,
-    ir::{JsonPointer, JsonRef},
-};
+use crate::{ParserContext, errors::DiagnosticCode};
 
 pub mod utils;
 
 pub use utils::*;
+
+pub enum ParseState<T> {
+    Parsed(T),
+    NoMatch,
+    Invalid,
+}
 
 /// Allows a struct to be converted / created from a JSON value, with error handling through the `ParserContext`.
 pub trait TryFromJson<'a>: Sized {
@@ -32,7 +34,7 @@ pub trait TryFromJson<'a>: Sized {
         ctx: &mut ParserContext,
         path: &str,
         value: &'a serde_json::Value,
-    ) -> Option<Self>;
+    ) -> ParseState<Self>;
 }
 
 /// A helper enum to represent a JSON number than can be any range from i64::MIN to u64::MAX, as well as f64 values.
@@ -52,20 +54,13 @@ impl JsonNumber {
 
 impl<'a> TryFromJson<'a> for JsonNumber {
     fn try_from_json(
-        ctx: &mut ParserContext,
-        path: &str,
+        _ctx: &mut ParserContext,
+        _path: &str,
         value: &'a serde_json::Value,
-    ) -> Option<Self> {
+    ) -> ParseState<Self> {
         match value {
-            serde_json::Value::Number(num) => Some(JsonNumber(num.clone())),
-            _ => {
-                ctx.push_to_errors(
-                    DiagnosticCode::InvalidPropertyType,
-                    format!("Expected a number, but found: {value}"),
-                    path.into(),
-                );
-                None
-            }
+            serde_json::Value::Number(num) => ParseState::Parsed(JsonNumber(num.clone())),
+            _ => ParseState::Invalid,
         }
     }
 }
@@ -157,19 +152,26 @@ impl<'a> JsonObject<'a> {
         ctx: &mut ParserContext,
         path: &str,
         field_name: &str,
-    ) -> Option<T> {
-        let raw_value = match self.get(field_name) {
-            Some(value) => value,
+    ) -> ParseState<T> {
+        let field_path = format!("{}/{}", path, field_name);
+
+        let value = match self.get(field_name) {
+            Some(v) => v,
             None => {
                 ctx.push_to_errors(
                     DiagnosticCode::MissingRequiredProperty,
-                    format!("Missing required property: {}", field_name),
-                    format!("{}/{}", path, field_name),
+                    format!("Missing required field '{}' at {}", field_name, path),
+                    field_path,
                 );
-                return None;
+                return ParseState::Invalid;
             }
         };
-        T::try_from_json(ctx, &format!("{}/{}", path, field_name), raw_value)
+
+        match T::try_from_json(ctx, &field_path, value) {
+            ParseState::Parsed(v) => ParseState::Parsed(v),
+            ParseState::Invalid => ParseState::Invalid,
+            ParseState::NoMatch => ParseState::NoMatch,
+        }
     }
 
     /// Tries to parse an optional field from the JSON object using the `TryFromJson` trait.
@@ -196,96 +198,55 @@ impl<'a> JsonObject<'a> {
         path: &str,
         field_name: &str,
     ) -> Option<T> {
-        let raw_value = match self.get(field_name) {
-            Some(value) => value,
-            None => return None, // Optional field is not present, so we just return None without pushing an error
+        let field_path = format!("{}/{}", path, field_name);
+
+        let value = match self.get(field_name) {
+            Some(v) => v,
+            None => {
+                return None;
+            }
         };
-        T::try_from_json(ctx, &format!("{}/{}", path, field_name), raw_value)
-    }
 
-    /// Checks if the JSON object is a reference object, which is defined as an object that has a `$ref` property and no other properties.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the JSON object is a reference object, or `false` if it is not.
-    pub fn is_ref_object(&self) -> bool {
-        self.contains_key("$ref") && self.0.len() == 1
-    }
-
-    /// If the JSON object is a reference object, tries to parse the `$ref` property as a `JsonRef`.
-    /// If the `$ref` property is missing, `None` will be returned. If the `$ref` property is present but cannot be
-    /// parsed into a valid `JsonRef`, an error will be pushed to the `ParserContext` and `None` will be returned.
-    /// If the JSON object is not a reference object, `None` will be returned.
-    ///
-    /// # Arguments
-    ///
-    /// * `ctx` - The parser context to which any diagnostic errors should be pushed, if found.
-    /// * `path` - A JSON pointer string indicating the location of the value being parsed within the overall JSON structure.
-    ///
-    /// # Returns
-    ///
-    /// An `Option<JsonRef>` which is `Some(JsonRef)` if the JSON object is a reference object and the `$ref` property
-    /// was successfully parsed into a `JsonRef`, or `None` otherwise.
-    pub fn get_ref(&self, ctx: &mut ParserContext, path: &str) -> Option<JsonRef> {
-        if self.is_ref_object() {
-            // unwrap is safe here because we have already checked that the $ref field is present with is_ref_object
-            let ref_str = self.required_field::<String>(ctx, path, "$ref").unwrap();
-
-            if JsonPointer::is_valid_local_json_pointer(&ref_str) {
-                Some(JsonRef::new_local_pointer(
-                    ref_str.clone(),
-                    JsonPointer::from(&ref_str),
-                ))
-            } else {
+        match T::try_from_json(ctx, &field_path, value) {
+            ParseState::Parsed(v) => Some(v),
+            ParseState::Invalid => None,
+            ParseState::NoMatch => {
                 ctx.push_to_errors(
-                    DiagnosticCode::InvalidReference,
-                    format!("Invalid JSON pointer: {}", ref_str),
-                    path.into(),
+                    DiagnosticCode::InvalidPropertyType,
+                    format!(
+                        "Invalid property type for field '{}' at {}",
+                        field_name, path
+                    ),
+                    field_path,
                 );
                 None
             }
-        } else {
-            None
         }
     }
 }
 
 impl<'a> TryFromJson<'a> for String {
     fn try_from_json(
-        ctx: &mut ParserContext,
-        path: &str,
+        _ctx: &mut ParserContext,
+        _path: &str,
         value: &'a serde_json::Value,
-    ) -> Option<Self> {
+    ) -> ParseState<Self> {
         match value {
-            serde_json::Value::String(s) => Some(s.to_owned()),
-            _ => {
-                ctx.push_to_errors(
-                    DiagnosticCode::InvalidPropertyType,
-                    format!("Expected a string, but found: {value}"),
-                    path.into(),
-                );
-                None
-            }
+            serde_json::Value::String(s) => ParseState::Parsed(s.to_owned()),
+            _ => ParseState::NoMatch,
         }
     }
 }
 
 impl<'a> TryFromJson<'a> for bool {
     fn try_from_json(
-        ctx: &mut ParserContext,
-        path: &str,
+        _ctx: &mut ParserContext,
+        _path: &str,
         value: &'a serde_json::Value,
-    ) -> Option<Self> {
+    ) -> ParseState<Self> {
         match value {
-            serde_json::Value::Bool(b) => Some(*b),
-            _ => {
-                ctx.push_to_errors(
-                    DiagnosticCode::InvalidPropertyType,
-                    format!("Expected a boolean, but found: {value}"),
-                    path.into(),
-                );
-                None
-            }
+            serde_json::Value::Bool(b) => ParseState::Parsed(*b),
+            _ => ParseState::NoMatch,
         }
     }
 }

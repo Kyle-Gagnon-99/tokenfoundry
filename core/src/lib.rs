@@ -6,7 +6,7 @@
 
 use crate::{
     errors::{Diagnostic, DiagnosticCode},
-    ir::IrDocument,
+    ir::JsonPointer,
 };
 
 pub mod config;
@@ -15,12 +15,12 @@ pub mod ir;
 pub mod parser;
 pub mod token;
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone)]
 pub enum FileFormat {
     Json,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone)]
 pub struct ParserContext {
     pub file_path: String,
     pub file_format: FileFormat,
@@ -28,6 +28,7 @@ pub struct ParserContext {
     pub errors: Vec<errors::Diagnostic>,
     pub warnings: Vec<errors::Diagnostic>,
     pub infos: Vec<errors::Diagnostic>,
+    pub current_path: JsonPointer,
 }
 
 impl ParserContext {
@@ -39,6 +40,7 @@ impl ParserContext {
             errors: Vec::new(),
             warnings: Vec::new(),
             infos: Vec::new(),
+            current_path: JsonPointer::new(),
         }
     }
 
@@ -85,5 +87,9 @@ impl ParserContext {
             file_path: Some(self.file_path.clone()),
             path,
         });
+    }
+
+    pub fn get_current_path(&self) -> String {
+        self.current_path.to_string()
     }
 }
