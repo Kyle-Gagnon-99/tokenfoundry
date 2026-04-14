@@ -30,14 +30,21 @@ pub enum DimensionUnit {
 
 impl<'a> TryFromJson<'a> for DimensionUnit {
     fn try_from_json(
-        _ctx: &mut crate::ParserContext,
-        _path: &str,
+        ctx: &mut crate::ParserContext,
+        path: &str,
         value: &'a serde_json::Value,
     ) -> ParseState<Self> {
         match value {
             serde_json::Value::String(s) if s == "px" => ParseState::Parsed(Self::Px),
             serde_json::Value::String(s) if s == "rem" => ParseState::Parsed(Self::Rem),
-            _ => ParseState::NoMatch,
+            _ => {
+                ctx.push_to_errors(
+                    DiagnosticCode::InvalidPropertyValue,
+                    format!("Expected either 'px' or 'rem' for unit at {}", path),
+                    path.into(),
+                );
+                ParseState::Invalid
+            }
         }
     }
 }
@@ -69,18 +76,6 @@ impl<'a> TryFromJson<'a> for DimensionTokenValue {
         // Now, require the "value" property
         let value = obj.required_field::<RefOrLiteral<DimensionValue>>(ctx, path, "value");
         let unit = obj.required_field::<RefOrLiteral<DimensionUnit>>(ctx, path, "unit");
-
-        // If unit returns back with NoMatch, then it means that the unit field is present but has an invalid value
-        match unit {
-            ParseState::NoMatch => {
-                ctx.push_to_errors(
-                    DiagnosticCode::InvalidPropertyValue,
-                    format!("Expected either 'px' or 'rem' for unit at {}", path),
-                    path.into(),
-                );
-            }
-            _ => {}
-        }
 
         match (value, unit) {
             (ParseState::Parsed(value), ParseState::Parsed(unit)) => {
@@ -124,8 +119,15 @@ mod tests {
 
         let state = DimensionUnit::try_from_json(&mut ctx, "#/token/unit", &json!("em"));
 
-        assert!(matches!(state, ParseState::NoMatch));
-        assert!(ctx.errors.is_empty());
+        assert!(matches!(state, ParseState::Invalid));
+        assert!(ctx.errors.len() == 1);
+        assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyValue);
+        assert_eq!(ctx.errors[0].path, "#/token/unit");
+        assert!(
+            ctx.errors[0]
+                .message
+                .contains("Expected either 'px' or 'rem' for unit at #/token/unit")
+        );
     }
 
     #[test]
@@ -209,7 +211,7 @@ mod tests {
         assert!(matches!(state, ParseState::Invalid));
         assert_eq!(ctx.errors.len(), 1);
         assert_eq!(ctx.errors[0].code, DiagnosticCode::InvalidPropertyValue);
-        assert_eq!(ctx.errors[0].path, "#/token");
+        assert_eq!(ctx.errors[0].path, "#/token/unit");
         assert!(
             ctx.errors[0]
                 .message

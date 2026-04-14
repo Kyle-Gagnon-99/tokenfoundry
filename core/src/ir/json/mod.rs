@@ -225,6 +225,53 @@ impl<'a> JsonObject<'a> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonArray<'a>(pub &'a Vec<serde_json::Value>);
+
+impl<'a> JsonArray<'a> {
+    pub fn from_value(value: &'a serde_json::Value) -> Option<Self> {
+        match value {
+            serde_json::Value::Array(arr) => Some(Self(arr)),
+            _ => None,
+        }
+    }
+
+    pub fn new(arr: &'a Vec<serde_json::Value>) -> Self {
+        Self(arr)
+    }
+
+    pub fn get(&self, index: usize) -> Option<&'a serde_json::Value> {
+        self.0.get(index)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn parse_for_each<T: TryFromJson<'a>>(
+        &self,
+        ctx: &mut ParserContext,
+        path: &str,
+    ) -> Option<Vec<T>> {
+        let mut results = Vec::new();
+        for (index, value) in self.0.iter().enumerate() {
+            let item_path = format!("{}/{}", path, index);
+            match T::try_from_json(ctx, &item_path, value) {
+                ParseState::Parsed(v) => results.push(v),
+                _ => {
+                    ctx.push_to_errors(
+                        DiagnosticCode::InvalidPropertyType,
+                        format!("Invalid element at {}", item_path),
+                        item_path,
+                    );
+                    return None;
+                }
+            }
+        }
+        Some(results)
+    }
+}
+
 impl<'a> TryFromJson<'a> for String {
     fn try_from_json(
         _ctx: &mut ParserContext,
