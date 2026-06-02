@@ -1,0 +1,19 @@
+{
+  "foundation": {
+    "spacing": {
+      "$type": "dimension",
+      "xs": {
+        "$value": {
+          "value": 4,
+          "unit": "px"
+        }
+      },
+      "md": {
+        "$value": {
+          "value": 16,
+          "unit": "px"
+        }
+      }
+    }
+  }
+}

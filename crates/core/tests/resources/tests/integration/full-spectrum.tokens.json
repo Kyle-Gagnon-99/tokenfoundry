@@ -1,0 +1,214 @@
+{
+  "colors": {
+    "$type": "color",
+    "brand": {
+      "$description": "Brand color tokens with literal, alias, and ref forms.",
+      "primary": {
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.2, 0.4, 1.0],
+          "hex": "#3366ff"
+        }
+      },
+      "secondary": {
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.1, 0.75, 0.6],
+          "alpha": 0.85,
+          "hex": "#1acc99"
+        }
+      },
+      "surfaceAlias": {
+        "$value": "{colors.brand.primary}"
+      },
+      "secondaryRef": {
+        "$value": {
+          "$ref": "#/colors/brand/secondary"
+        }
+      }
+    }
+  },
+  "spacing": {
+    "$type": "dimension",
+    "xs": {
+      "$value": {
+        "value": 1,
+        "unit": "px"
+      }
+    },
+    "sm": {
+      "$value": {
+        "value": 2,
+        "unit": "px"
+      }
+    },
+    "md": {
+      "$value": {
+        "value": 16,
+        "unit": "px"
+      }
+    }
+  },
+  "fonts": {
+    "$type": "fontFamily",
+    "sans": {
+      "$value": ["Fira Sans", "Arial", "sans-serif"]
+    },
+    "body": {
+      "$type": "fontFamily",
+      "$value": {
+        "$ref": "#/fonts/sans"
+      }
+    }
+  },
+  "weights": {
+    "$type": "fontWeight",
+    "regular": {
+      "$value": "regular"
+    },
+    "strong": {
+      "$value": 700
+    }
+  },
+  "numbers": {
+    "$type": "number",
+    "lineHeightBase": {
+      "$value": 1.5
+    },
+    "opacityStrong": {
+      "$value": {
+        "$ref": "#/numbers/lineHeightBase"
+      }
+    }
+  },
+  "motion": {
+    "durations": {
+      "$type": "duration",
+      "fast": {
+        "$value": {
+          "value": 200,
+          "unit": "ms"
+        }
+      },
+      "slow": {
+        "$value": {
+          "$ref": "#/motion/durations/fast"
+        }
+      }
+    },
+    "easing": {
+      "$type": "cubicBezier",
+      "standard": {
+        "$value": [0.25, 0.1, 0.25, 1.0]
+      }
+    },
+    "transitions": {
+      "$type": "transition",
+      "emphasis": {
+        "$value": {
+          "duration": {
+            "$ref": "#/motion/durations/fast"
+          },
+          "delay": "{motion.durations.slow}",
+          "timingFunction": {
+            "$ref": "#/motion/easing/standard"
+          }
+        }
+      }
+    }
+  },
+  "stroke": {
+    "$type": "strokeStyle",
+    "solidPrimary": {
+      "$value": "solid"
+    },
+    "focusRing": {
+      "$value": {
+        "dashArray": [
+          {
+            "$ref": "#/spacing/xs"
+          },
+          "{spacing.sm}"
+        ],
+        "lineCap": "round"
+      }
+    }
+  },
+  "borders": {
+    "$type": "border",
+    "subtle": {
+      "$value": {
+        "color": {
+          "$ref": "#/colors/brand/secondary"
+        },
+        "width": "{spacing.xs}",
+        "style": {
+          "$ref": "#/stroke/solidPrimary"
+        }
+      }
+    }
+  },
+  "effects": {
+    "shadows": {
+      "$type": "shadow",
+      "elevation": {
+        "$value": [
+          {
+            "color": {
+              "$ref": "#/colors/brand/secondary"
+            },
+            "offsetX": "{spacing.xs}",
+            "offsetY": {
+              "value": 2,
+              "unit": "px"
+            },
+            "blur": "{spacing.md}",
+            "spread": {
+              "value": 0,
+              "unit": "px"
+            },
+            "inset": false
+          }
+        ]
+      }
+    },
+    "gradients": {
+      "$type": "gradient",
+      "hero": {
+        "$value": [
+          {
+            "color": "{colors.brand.primary}",
+            "position": 0
+          },
+          {
+            "color": {
+              "$ref": "#/colors/brand/secondary"
+            },
+            "position": 1
+          }
+        ]
+      }
+    }
+  },
+  "typography": {
+    "$type": "typography",
+    "body": {
+      "$value": {
+        "fontFamily": {
+          "$ref": "#/fonts/sans"
+        },
+        "fontSize": "{spacing.md}",
+        "fontWeight": {
+          "$ref": "#/weights/strong"
+        },
+        "letterSpacing": {
+          "value": 0,
+          "unit": "px"
+        },
+        "lineHeight": {
+          "$ref": "#/numbers/lineHeightBase"
+        }
+      }
+    }
+  }
+}

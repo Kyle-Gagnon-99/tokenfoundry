@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Config",
+  "type": "object",
+  "properties": {
+    "css": {
+      "description": "The CSS configuration options. This allows you to configure how tokens are transformed to CSS custom properties.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CssConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "extends": {
+      "description": "A path to a configuration file to extend from. This allows you to have a base configuration file that can be extended by other configuration files, which is useful for sharing common configuration options across multiple projects or environments.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "logLevel": {
+      "description": "The log level to use for the CLI tool. This allows you to configure how much information the CLI tool logs to the console when it runs. For example, if the log level is set to \"info\", then the CLI tool will log informational messages, warnings, and errors, but not debug messages.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LogLevel"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tailwind": {
+      "description": "The Tailwind CSS configuration options. This allows you to configure how tokens are transformed to Tailwind CSS custom properties.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TailwindConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "CssConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether to enable transforming tokens to CSS custom properties. If enabled, tokens will be transformed to CSS custom properties (e.g., a token named \"color-primary\" would be transformed to \"--color-primary\"). If not enabled, tokens will not be transformed to CSS custom properties.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "prefix": {
+          "description": "The prefix to use for CSS custom properties. For example, if the prefix is \"tf\", then a token named \"color-primary\" would be transformed to \"--tf-color-primary\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "LogLevel": {
+      "oneOf": [
+        {
+          "description": "Log everything (including debug messages)",
+          "type": "string",
+          "const": "Debug"
+        },
+        {
+          "description": "Log informational messages",
+          "type": "string",
+          "const": "Info"
+        },
+        {
+          "description": "Log warnings",
+          "type": "string",
+          "const": "Warning"
+        },
+        {
+          "description": "Log errors only",
+          "type": "string",
+          "const": "Error"
+        }
+      ]
+    },
+    "TailwindConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether to enable transforming tokens to Tailwind CSS custom properties. If enabled, tokens will be transformed to Tailwind CSS custom properties (e.g., a token named \"color-primary\" would be transformed to \"--color-primary\"). If not enabled, tokens will not be transformed to Tailwind CSS custom properties.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "prefix": {
+          "description": "The prefix to use for Tailwind CSS custom properties. For example, if the prefix is \"tf\", then a token named \"color-primary\" would be transformed to \"--tf-color-primary\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

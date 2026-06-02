@@ -1,0 +1,29 @@
+{
+  "primitives": {
+    "opacity": {
+      "$type": "number",
+      "strong": {
+        "$value": 0.72
+      }
+    },
+    "typography": {
+      "bodyFamily": {
+        "$type": "fontFamily",
+        "$value": ["Inter", "Arial", "sans-serif"]
+      },
+      "bodyLineHeight": {
+        "$type": "number",
+        "$value": 1.5
+      }
+    },
+    "spacing": {
+      "$type": "dimension",
+      "md": {
+        "$value": {
+          "value": 16,
+          "unit": "px"
+        }
+      }
+    }
+  }
+}

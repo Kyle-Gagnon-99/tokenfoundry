@@ -1,0 +1,111 @@
+{
+  "$schema": "https://www.designtokens.org/schemas/2025.10/resolver.json",
+  "name": "Multi-Theme Resolver Example",
+  "version": "2025.10",
+  "description": "Example resolver showing theme, size, and accessibility modifiers",
+  "sets": {
+    "foundation": {
+      "description": "Base tokens used in all themes",
+      "sources": [
+        {
+          "space": {
+            "xs": { "$value": { "value": 4, "unit": "px" }, "$type": "dimension" },
+            "sm": { "$value": { "value": 8, "unit": "px" }, "$type": "dimension" },
+            "md": { "$value": { "value": 16, "unit": "px" }, "$type": "dimension" },
+            "lg": { "$value": { "value": 24, "unit": "px" }, "$type": "dimension" }
+          }
+        }
+      ]
+    },
+    "semanticSizes": {
+      "description": "Device-specific spacing adjustments",
+      "sources": [
+        {
+          "mobile": { "$value": "{space.xs}", "$type": "dimension" }
+        }
+      ]
+    }
+  },
+  "modifiers": {
+    "theme": {
+      "description": "Color theme variants (light/dark)",
+      "contexts": {
+        "light": [
+          {
+            "color": {
+              "background": { "$value": { "colorSpace": "srgb", "components": [1, 1, 1], "hex": "#FFFFFF" }, "$type": "color" },
+              "foreground": { "$value": { "colorSpace": "srgb", "components": [0, 0, 0], "hex": "#000000" }, "$type": "color" },
+              "primary": { "$value": { "colorSpace": "srgb", "components": [0, 0.4, 0.8], "hex": "#0066CC" }, "$type": "color" },
+              "secondary": { "$value": { "colorSpace": "srgb", "components": [0.4235, 0.4588, 0.4902], "hex": "#6C757D" }, "$type": "color" }
+            }
+          }
+        ],
+        "dark": [
+          {
+            "color": {
+              "background": { "$value": { "colorSpace": "srgb", "components": [0.1, 0.1, 0.1], "hex": "#1A1A1A" }, "$type": "color" },
+              "foreground": { "$value": { "colorSpace": "srgb", "components": [1, 1, 1], "hex": "#FFFFFF" }, "$type": "color" },
+              "primary": { "$value": { "colorSpace": "srgb", "components": [0.2, 0.6, 1], "hex": "#3399FF" }, "$type": "color" },
+              "secondary": { "$value": { "colorSpace": "srgb", "components": [0.6275, 0.6275, 0.6275], "hex": "#A0A0A0" }, "$type": "color" }
+            }
+          }
+        ],
+        "lightHighContrast": [
+          {
+            "color": {
+              "background": { "$value": { "colorSpace": "srgb", "components": [1, 1, 1], "hex": "#FFFFFF" }, "$type": "color" },
+              "foreground": { "$value": { "colorSpace": "srgb", "components": [0, 0, 0], "hex": "#000000" }, "$type": "color" },
+              "primary": { "$value": { "colorSpace": "srgb", "components": [0, 0, 0.9333], "hex": "#0000EE" }, "$type": "color" },
+              "secondary": { "$value": { "colorSpace": "srgb", "components": [0.2, 0.2, 0.2], "hex": "#333333" }, "$type": "color" }
+            }
+          }
+        ]
+      },
+      "default": "light"
+    },
+    "device": {
+      "description": "Device size variants",
+      "contexts": {
+        "mobile": [
+          {
+            "breakpoint": { "$value": { "value": 0, "unit": "px" }, "$type": "dimension" },
+            "spacing": { "$ref": "#/sets/semanticSizes" }
+          }
+        ],
+        "tablet": [
+          {
+            "breakpoint": { "$value": { "value": 768, "unit": "px" }, "$type": "dimension" },
+            "spacing": { "$value": "{space.sm}", "$type": "dimension" }
+          }
+        ],
+        "desktop": [
+          {
+            "breakpoint": { "$value": { "value": 1024, "unit": "px" }, "$type": "dimension" },
+            "spacing": { "$value": "{space.md}", "$type": "dimension" }
+          }
+        ]
+      },
+      "default": "desktop"
+    },
+    "accessibility": {
+      "description": "Accessibility preferences",
+      "contexts": {
+        "normal": [],
+        "reduceMotion": [
+          {
+            "animation": {
+              "enabled": { "$value": 0, "$type": "number" }
+            }
+          }
+        ]
+      },
+      "default": "normal"
+    }
+  },
+  "resolutionOrder": [
+    { "$ref": "#/sets/foundation" },
+    { "$ref": "#/modifiers/theme" },
+    { "$ref": "#/modifiers/device" },
+    { "$ref": "#/modifiers/accessibility" }
+  ]
+}

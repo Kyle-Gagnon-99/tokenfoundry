@@ -1,0 +1,16 @@
+[package]
+name = "tokenfoundry-cli"
+description = "Command-line interface for Token Foundry"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+clap = { workspace = true }
+figment = { workspace = true }
+miette = { workspace = true }
+tokenfoundry-core = { path = "../core" }
+toml = "1.1.2"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+serde = { workspace = true, features = ["derive"] }

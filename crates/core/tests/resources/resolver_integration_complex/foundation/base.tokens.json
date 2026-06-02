@@ -1,0 +1,15 @@
+{
+  "foundation": {
+    "brand": {
+      "$type": "color",
+      "primary": {
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.2, 0.4, 1.0],
+          "alpha": 1,
+          "hex": "#3366ff"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "foundation": {
+    "colors": {
+      "$type": "color",
+      "primary": {
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.2, 0.4, 1.0],
+          "alpha": 1,
+          "hex": "#3366ff"
+        }
+      },
+      "secondary": {
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.1, 0.75, 0.6],
+          "alpha": 0.85,
+          "hex": "#1acc99"
+        }
+      }
+    }
+  }
+}

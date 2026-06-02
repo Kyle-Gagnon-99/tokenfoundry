@@ -25,6 +25,6 @@ Below are a list of desired products / features that we want to build with Token
 
 TokenFoundry is a personal project of mine. I am learning about design tokens, design systems, web development, and components. I come from a background of embedded software development, but I want to expand and make tools that work with me.
 
-I also have been on a journey to learn about user expierience design and user interface design. I have been on a journey to learn about accessibility and inclusive design. I want to make tools that are accessible and inclusive for everyone.
+I also have been on a journey to learn about user experience design and user interface design. I have been on a journey to learn about accessibility and inclusive design. I want to make tools that are accessible and inclusive for everyone.
 
 I believe in the power of open source software and the community. This is just a personal project, but if you find it useful, please let me know!

@@ -1,0 +1,51 @@
+{
+  "missingGroupAndTokenType": {
+    "orphan": {
+      "$value": 42
+    }
+  },
+  "invalidGroupType": {
+    "$type": "paint",
+    "childWithoutGroupBadType": {
+      "$value": 1
+    }
+  },
+  "invalidTokenType": {
+    "explicitBadType": {
+      "$type": "paint",
+      "$value": 123
+    }
+  },
+  "badColor": {
+    "$type": "color",
+    "missingRequiredFields": {
+      "$value": {
+        "hex": "#3366ff"
+      }
+    },
+    "badAlias": {
+      "$value": "{colors.brand.primary"
+    }
+  },
+  "badDimension": {
+    "$type": "dimension",
+    "wrongShape": {
+      "$value": "16px"
+    }
+  },
+  "badReference": {
+    "$type": "number",
+    "brokenRefObject": {
+      "$value": {
+        "$ref": "#/numbers/base",
+        "extra": true
+      }
+    }
+  },
+  "recovery": {
+    "$type": "number",
+    "ok": {
+      "$value": 7
+    }
+  }
+}

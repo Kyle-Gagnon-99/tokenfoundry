@@ -1,0 +1,5 @@
+#:schema ../config.schema.json
+logLevel = "Info"
+
+[css]
+enabled = false

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://www.designtokens.org/schemas/2025.10/resolver.json",
+  "name": "Complex Resolver Integration Fixture",
+  "version": "2025.10",
+  "sets": {
+    "foundation": {
+      "sources": [
+        { "$ref": "foundation/primitives.tokens.json" },
+        { "$ref": "foundation/base.tokens.json" }
+      ]
+    }
+  },
+  "modifiers": {
+    "theme": {
+      "contexts": {
+        "light": [
+          { "$ref": "themes/themes.tokens.json#/themes/light" }
+        ],
+        "dark": [
+          { "$ref": "themes/themes.tokens.json#/themes/dark" }
+        ]
+      },
+      "default": "dark"
+    }
+  },
+  "resolutionOrder": [
+    { "$ref": "#/sets/foundation" },
+    { "$ref": "#/modifiers/theme" }
+  ]
+}

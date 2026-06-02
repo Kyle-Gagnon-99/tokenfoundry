@@ -1,0 +1,40 @@
+{
+  "themes": {
+    "light": {
+      "semantic": {
+        "accent": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [0.95, 0.95, 0.95],
+            "alpha": 1,
+            "hex": "#f2f2f2"
+          }
+        }
+      }
+    },
+    "dark": {
+      "semantic": {
+        "accent": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [0.2, 0.4, 1.0],
+            "alpha": { "$ref": "#/primitives/opacity/strong/$value" },
+            "hex": "#3366ff"
+          }
+        },
+        "body": {
+          "$type": "typography",
+          "$value": {
+            "fontFamily": { "$ref": "#/primitives/typography/bodyFamily/$value" },
+            "fontSize": { "$ref": "#/primitives/spacing/md/$value" },
+            "fontWeight": 700,
+            "letterSpacing": { "value": 0, "unit": "px" },
+            "lineHeight": "{primitives.typography.bodyLineHeight}"
+          }
+        }
+      }
+    }
+  }
+}
