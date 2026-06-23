@@ -1,5 +1,7 @@
 //! The `path` module defines the `TokenPath` struct, which represents the hierarchical path of a design token in the IR. The `TokenPath` is used to uniquely identify tokens and their relationships within the design system.
 
+use std::fmt::Display;
+
 /// The `TokenPath` struct represents the hierarchical path of a design token in the IR, which is used to identify
 /// the token and its position in the token hierarchy. The path is represented as a vector of strings, where each string
 /// represents a segment of the path, such as a group name or a token name. The segments are ordered from the root of the hierarchy
@@ -8,6 +10,12 @@
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TokenPath {
     pub segments: Vec<String>,
+}
+
+impl Display for TokenPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_dot_path())
+    }
 }
 
 impl TokenPath {

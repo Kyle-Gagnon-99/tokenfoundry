@@ -1,6 +1,7 @@
 //! The `common` module contains common types and utilities that are used across different parts of the IR in the library.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 use crate::ir::{TokenId, TokenPath};
 
@@ -24,7 +25,7 @@ pub enum Deprecation {
 /// `source` points to the originating resolver source reference (file path,
 /// fragment, or inline source marker). `pointer` is the JSON pointer to the
 /// token node within that source.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TokenProvenance {
     pub source: String,
     pub pointer: String,
@@ -41,6 +42,34 @@ pub struct TokenCommon {
     pub description: Option<String>,
     pub deprecation: Option<Deprecation>,
     pub extensions: Option<HashMap<String, serde_json::Value>>,
+}
+
+impl Hash for TokenCommon {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        self.path.hash(state);
+        self.provenance.hash(state);
+        self.name.hash(state);
+        self.description.hash(state);
+        self.deprecation.hash(state);
+
+        match &self.extensions {
+            Some(extensions) => {
+                true.hash(state);
+
+                // Hash map entries in a stable order so hashing is deterministic.
+                let mut entries: Vec<_> = extensions.iter().collect();
+                entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
+                for (key, value) in entries {
+                    key.hash(state);
+                    value.hash(state);
+                }
+            }
+            None => {
+                false.hash(state);
+            }
+        }
+    }
 }
 
 impl TokenCommon {

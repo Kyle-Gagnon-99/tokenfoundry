@@ -132,6 +132,39 @@ pub enum ResolutionItem {
     },
 }
 
+impl ResolverDocument {
+    /// Get the list of modifier names
+    ///
+    /// # Returns
+    ///
+    /// A vector of modifier names defined in the resolver document, or an empty vector if no modifiers are defined.
+    pub fn get_modifier_names(&self) -> Vec<String> {
+        self.modifiers
+            .as_ref()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Get a map of modifier names to their available context values
+    ///
+    /// # Returns
+    ///
+    /// A HashMap where the keys are modifier names and the values are vectors of context names available for each modifier.
+    /// If no modifiers are defined, returns an empty HashMap.
+    pub fn get_modifier_map(&self) -> HashMap<String, Vec<String>> {
+        self.modifiers
+            .as_ref()
+            .map(|m| {
+                m.iter()
+                    .map(|(name, modifier)| {
+                        (name.clone(), modifier.contexts.keys().cloned().collect())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
 /// Represents a JSON reference/pointer
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsonPointerRef {

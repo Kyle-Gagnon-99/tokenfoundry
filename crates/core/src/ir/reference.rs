@@ -1,8 +1,11 @@
 //! The `reference` module contains the defintions and logic for referencing and aliasing
 
+use std::fmt::Display;
+
 use crate::{
-    errors::DiagnosticCode,
-    ir::{DiagnosticOwnership, InvalidReason, ParseState, TokenPath, TryFromJson},
+    errors::{DiagnosticCode, ParseDiagnosticCode},
+    ir::{DiagnosticEmission, InvalidReason, ParseFailureKind, ParseState, TokenPath, TryFromJson},
+    parsing::ParserContext,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -84,7 +87,7 @@ impl TokenAlias {
 
 impl<'a> TryFromJson<'a> for TokenAlias {
     fn try_from_json(
-        ctx: &mut crate::ParserContext,
+        ctx: &mut ParserContext,
         path: &str,
         value: &'a serde_json::Value,
     ) -> ParseState<Self> {
@@ -102,24 +105,23 @@ impl<'a> TryFromJson<'a> for TokenAlias {
         // If it does not end with '}', then it is not a valid alias, so push an error to the context and return Invalid
         // If it is a string that starts with '{' it is likely meant to be a DTCG alias, so we should push an error if it does not end with '}'
         if !s.ends_with('}') {
-            ctx.push_to_errors(
-                DiagnosticCode::InvalidReference,
-                format!("Invalid DTCG alias format: {}", s),
-                path.into(),
-            );
-            return ParseState::invalid_emitted(InvalidReason::InvalidReference);
+            ctx.diagnostics().error(DiagnosticCode::Parse(
+                ParseDiagnosticCode::InvalidDTCGAlias { alias: s.clone() },
+            ));
+            return ParseState::failed_emitted(ParseFailureKind::InvalidReference);
         }
 
         // It is a string that starts with '{' and ends with '}', so we will try to parse it as a DTCG alias
         match Self::from_dtcg_alias(s) {
             Some(alias) => ParseState::Parsed(alias),
             None => {
-                ctx.push_to_errors(
-                    DiagnosticCode::InvalidReference,
-                    format!("Invalid DTCG alias format: {}", s),
-                    path.into(),
-                );
-                return ParseState::invalid_emitted(InvalidReason::InvalidReference);
+                ctx.diagnostics()
+                    .error(DiagnosticCode::Parse(
+                        ParseDiagnosticCode::InvalidDTCGAlias { alias: s.clone() },
+                    ))
+                    .json_pointer(JsonPointer::new().push(path.to_string()))
+                    .emit();
+                return ParseState::failed_emitted(ParseFailureKind::InvalidReference);
             }
         }
     }
@@ -172,6 +174,11 @@ impl JsonPointer {
         }
     }
 
+    pub fn with_segment(&mut self, segment: impl Into<String>) -> &mut Self {
+        self.segments.push(segment.into());
+        self
+    }
+
     /// Checks if the `JsonPointer` is a root pointer, which means it has no segments and points to the root of the JSON document
     ///
     /// # Returns
@@ -201,6 +208,12 @@ impl JsonPointer {
 
     pub fn push(&mut self, segment: String) {
         self.segments.push(segment);
+    }
+}
+
+impl Display for JsonPointer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_string())
     }
 }
 
@@ -310,6 +323,21 @@ impl JsonRef {
     }
 }
 
+impl Into<String> for JsonRef {
+    fn into(self) -> String {
+        match self.document {
+            Some(doc) => {
+                if self.pointer.is_root() {
+                    doc
+                } else {
+                    format!("{}#{}", doc, self.pointer.to_string())
+                }
+            }
+            None => format!("#{}", self.pointer.to_string()),
+        }
+    }
+}
+
 impl<'a> TryFromJson<'a> for JsonRef {
     fn try_from_json(
         _ctx: &mut crate::ParserContext,
@@ -368,9 +396,9 @@ impl<'a> TryFromJson<'a> for JsonRefObject {
             ParseState::Parsed(json_ref) => ParseState::Parsed(Self {
                 reference: json_ref,
             }),
-            ParseState::Invalid(inv) => {
+            ParseState::Failed(inv) => {
                 let mut reason = inv.reason;
-                if inv.ownership == DiagnosticOwnership::Silent {
+                if inv.ownership == DiagnosticEmission::Silent {
                     ctx.push_to_errors(
                         DiagnosticCode::InvalidReference,
                         format!("Invalid '$ref' value in JsonRefObject: expected a string in the format of a JSON reference, but got: {:?}", ref_value),
@@ -464,9 +492,9 @@ impl<'a, T: TryFromJson<'a>> TryFromJson<'a> for RefOrLiteral<T> {
         // First, we will try to parse the value as a reference using the JsonRef parser
         match JsonRefObject::try_from_json(ctx, path, value) {
             ParseState::Parsed(json_ref) => return ParseState::Parsed(Self::from_ref(json_ref)),
-            ParseState::Invalid(inv) => {
+            ParseState::Failed(inv) => {
                 let mut reason = inv.reason;
-                if inv.ownership == DiagnosticOwnership::Silent {
+                if inv.ownership == DiagnosticEmission::Silent {
                     ctx.push_to_errors(
                         DiagnosticCode::InvalidReference,
                         format!("Invalid reference format: expected a JSON reference object with a '$ref' property, but got: {:?}", value),
@@ -480,9 +508,9 @@ impl<'a, T: TryFromJson<'a>> TryFromJson<'a> for RefOrLiteral<T> {
                 // If it does not match the JsonRef parser, we will try to parse it as a literal value of type T
                 match T::try_from_json(ctx, path, value) {
                     ParseState::Parsed(literal) => ParseState::Parsed(Self::from_literal(literal)),
-                    ParseState::Invalid(inv) => {
+                    ParseState::Failed(inv) => {
                         let mut reason = inv.reason;
-                        if inv.ownership == DiagnosticOwnership::Silent {
+                        if inv.ownership == DiagnosticEmission::Silent {
                             ctx.push_to_errors(
                                 DiagnosticCode::InvalidPropertyType,
                                 format!("Invalid property type for field '{}'", path),
@@ -499,7 +527,7 @@ impl<'a, T: TryFromJson<'a>> TryFromJson<'a> for RefOrLiteral<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RefAliasOrLiteral<T> {
     Alias(TokenAlias),
     Ref(JsonRefObject),
@@ -515,9 +543,9 @@ impl<'a, T: TryFromJson<'a>> TryFromJson<'a> for RefAliasOrLiteral<T> {
         // First, attempt the value as a TokenAlias
         match TokenAlias::try_from_json(ctx, path, value) {
             ParseState::Parsed(alias) => return ParseState::Parsed(Self::Alias(alias)),
-            ParseState::Invalid(inv) => {
+            ParseState::Failed(inv) => {
                 let mut reason = inv.reason;
-                if inv.ownership == DiagnosticOwnership::Silent {
+                if inv.ownership == DiagnosticEmission::Silent {
                     ctx.push_to_errors(
                         DiagnosticCode::InvalidReference,
                         format!("Invalid reference format: expected a JSON reference object with a '$ref' property, but got: {:?}", value),
@@ -531,9 +559,9 @@ impl<'a, T: TryFromJson<'a>> TryFromJson<'a> for RefAliasOrLiteral<T> {
                 // If it does not match the TokenAlias parser, we will try to parse it as a reference using the JsonRefObject parser
                 match JsonRefObject::try_from_json(ctx, path, value) {
                     ParseState::Parsed(json_ref) => return ParseState::Parsed(Self::Ref(json_ref)),
-                    ParseState::Invalid(inv) => {
+                    ParseState::Failed(inv) => {
                         let mut reason = inv.reason;
-                        if inv.ownership == DiagnosticOwnership::Silent {
+                        if inv.ownership == DiagnosticEmission::Silent {
                             ctx.push_to_errors(
                                 DiagnosticCode::InvalidReference,
                                 format!("Invalid reference format: expected a JSON reference object with a '$ref' property, but got: {:?}", value),
@@ -551,9 +579,9 @@ impl<'a, T: TryFromJson<'a>> TryFromJson<'a> for RefAliasOrLiteral<T> {
                             }
                             // The caller will likely want to error if Invalid or NoMatch is returned from the literal parser,
                             // since that means the value is not a valid literal and also not a valid reference or alias
-                            ParseState::Invalid(inv) => {
+                            ParseState::Failed(inv) => {
                                 let mut reason = inv.reason;
-                                if inv.ownership == DiagnosticOwnership::Silent {
+                                if inv.ownership == DiagnosticEmission::Silent {
                                     ctx.push_to_errors(
                                         DiagnosticCode::InvalidTokenValue,
                                         format!("Invalid literal value: {:?}", value),

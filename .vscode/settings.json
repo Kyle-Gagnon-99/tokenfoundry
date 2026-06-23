@@ -1,6 +1,13 @@
 {
     "chat.tools.terminal.autoApprove": {
         "cargo test": true,
-        "rustfmt": true
-    }
+        "rustfmt": true,
+        "cargo check": true,
+        "/^cd /workspaces/tokenfoundry && python - <<'PY'\nimport pathlib,re\nfiles=\\[pathlib\\.Path\\('crates/core/src/ir/reference\\.rs'\\), pathlib\\.Path\\('crates/core/src/parsing/token\\.rs'\\), pathlib\\.Path\\('crates/core/src/ir/json/utils\\.rs'\\)\\]\nfor p in files:\n    s=p\\.read_text\\(\\)\n    s=s\\.replace\\('path: &str,','path: &JsonPointer,'\\)\n    s=s\\.replace\\('_path: &str,','_path: &JsonPointer,'\\)\n    if '&JsonPointer' in s and 'JsonPointer' not in s\\.split\\('\\\\n',20\\)\\[0:20\\]:\n        pass\n    p\\.write_text\\(s\\)\nPY$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    },
+    "rust-analyzer.showSyntaxTree": true,
+    "rust-analyzer.testExplorer": true
 }

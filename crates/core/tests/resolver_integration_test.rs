@@ -4,16 +4,20 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use test_log::test;
 use tokenfoundry_core::{
     ParserContext,
-    graph::{EdgeKind, TokenGraph},
+    analysis::graph::{EdgeKind, TokenGraph},
+    input::resolver::{ResolveOptions, Resolver},
     ir::{
         IrTokenType, IrTokenValue, RefAliasOrLiteral, RefOrLiteral, ResolutionInput, TokenPath,
         TokenValue, find_token_by_path,
     },
-    parser::parse_document,
-    resolver::{ResolveOptions, Resolver},
+    output::EmittableValue,
+    parsing::parse_document,
+    pipeline::{ResolvePipelineRequest, resolve_to_finalized_pipeline},
 };
+use tracing::info;
 
 fn resolver_fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -155,14 +159,11 @@ fn preserves_nested_json_pointer_refs_and_materializes_dtcg_aliases_after_multif
         .resolve(input)
         .expect("complex resolver should merge external files");
 
-    assert_eq!(
-        resolved["semantic"]["accent"]["$value"]["alpha"]["$ref"],
-        "#/primitives/opacity/strong/$value"
-    );
+    assert_eq!(resolved["semantic"]["accent"]["$value"]["alpha"], 0.72);
     assert_eq!(resolved["semantic"]["body"]["$value"]["lineHeight"], 1.5);
     assert_eq!(
-        resolved["semantic"]["body"]["$value"]["fontFamily"]["$ref"],
-        "#/primitives/typography/bodyFamily/$value"
+        resolved["semantic"]["body"]["$value"]["fontFamily"],
+        serde_json::json!(["Inter", "Arial", "sans-serif"])
     );
     assert_eq!(
         resolved["foundation"]["brand"]["primary"]["$value"]["hex"],
@@ -191,7 +192,7 @@ fn preserves_nested_json_pointer_refs_and_materializes_dtcg_aliases_after_multif
 
     match &accent.value {
         TokenValue::Value(IrTokenValue::Color(color)) => {
-            assert!(matches!(color.alpha, Some(RefOrLiteral::Ref(_))));
+            assert!(matches!(color.alpha, Some(RefOrLiteral::Literal(_))));
         }
         other => panic!("expected parsed color token value, got {:?}", other),
     }
@@ -207,9 +208,12 @@ fn preserves_nested_json_pointer_refs_and_materializes_dtcg_aliases_after_multif
         TokenValue::Value(IrTokenValue::Typography(typography)) => {
             assert!(matches!(
                 typography.font_family.0,
-                RefAliasOrLiteral::Ref(_)
+                RefAliasOrLiteral::Literal(_)
             ));
-            assert!(matches!(typography.font_size.0, RefAliasOrLiteral::Ref(_)));
+            assert!(matches!(
+                typography.font_size.0,
+                RefAliasOrLiteral::Literal(_)
+            ));
             assert!(matches!(
                 typography.line_height.0,
                 RefAliasOrLiteral::Literal(_)
@@ -230,6 +234,11 @@ fn complex_resolution_produces_expected_merged_tree_shape() {
     let resolved = resolver
         .resolve(input)
         .expect("complex resolver should merge external files");
+
+    info!(
+        "Resolved output with provenance extensions:\n{}",
+        serde_json::to_string_pretty(&resolved).unwrap()
+    );
 
     let mut normalized_resolved = resolved.clone();
     strip_provenance_extensions(&mut normalized_resolved);
@@ -274,15 +283,15 @@ fn complex_resolution_produces_expected_merged_tree_shape() {
                 "$value": {
                     "colorSpace": "srgb",
                     "components": [0.2, 0.4, 1.0],
-                    "alpha": { "$ref": "#/primitives/opacity/strong/$value" },
+                    "alpha": 0.72,
                     "hex": "#3366ff"
                 }
             },
             "body": {
                 "$type": "typography",
                 "$value": {
-                    "fontFamily": { "$ref": "#/primitives/typography/bodyFamily/$value" },
-                    "fontSize": { "$ref": "#/primitives/spacing/md/$value" },
+                    "fontFamily": ["Inter", "Arial", "sans-serif"],
+                    "fontSize": { "value": 16, "unit": "px" },
                     "fontWeight": 700,
                     "letterSpacing": { "value": 0, "unit": "px" },
                     "lineHeight": 1.5
@@ -293,7 +302,7 @@ fn complex_resolution_produces_expected_merged_tree_shape() {
 
     assert_eq!(normalized_resolved, expected);
 
-    println!(
+    info!(
         "Resolved output:\n{}",
         serde_json::to_string_pretty(&resolved).unwrap()
     );
@@ -582,6 +591,8 @@ fn resolves_resolver_to_ir_with_alias_preservation_for_reference_outputs() {
             ResolutionInput::new(),
             ResolveOptions {
                 materialize_aliases: false,
+                materialize_property_refs: true,
+                convert_token_refs_to_aliases: false,
             },
         )
         .expect("resolver should produce merged token json");
@@ -624,4 +635,137 @@ fn resolves_resolver_to_ir_with_alias_preservation_for_reference_outputs() {
     let _ = fs::remove_file(&foundation_path);
     let _ = fs::remove_file(&semantic_path);
     let _ = fs::remove_dir(&temp_dir);
+}
+
+#[test]
+fn resolves_complex_resolver_file_to_graph_with_options_via_convenience_api() {
+    let resolver = Resolver::from_file(complex_resolver_fixture_path())
+        .expect("complex resolver fixture should load");
+
+    let mut input = ResolutionInput::new();
+    input.add_selection("theme".to_string(), "dark".to_string());
+
+    let output = resolver
+        .resolve_to_graph_with_options(
+            input,
+            ResolveOptions {
+                materialize_aliases: false,
+                materialize_property_refs: true,
+                convert_token_refs_to_aliases: true,
+            },
+        )
+        .expect("complex resolver should resolve into a graph");
+
+    assert!(
+        output.parser_diagnostics.is_empty(),
+        "unexpected parse diagnostics: {:#?}",
+        output.parser_diagnostics
+    );
+    assert!(
+        output.graph_diagnostics.is_empty(),
+        "unexpected graph diagnostics: {:#?}",
+        output.graph_diagnostics
+    );
+
+    assert!(output.document.tokens.len() >= 2);
+    assert!(output.graph.node_count() >= 8);
+    assert!(output.graph.edge_count() >= 1);
+
+    // Property refs are materialized for output emitters.
+    assert_eq!(output.graph.count_edges_by_kind(EdgeKind::PropertyRef), 0);
+    // Alias semantics are retained at token level.
+    assert!(output.graph.count_edges_by_kind(EdgeKind::Alias) >= 1);
+
+    assert_eq!(
+        output.resolved_tokens["semantic"]["body"]["$value"]["fontFamily"],
+        serde_json::json!(["Inter", "Arial", "sans-serif"])
+    );
+}
+
+#[test]
+fn finalized_pipeline_produces_value_or_alias_tokens_with_extends_and_root_support() {
+    let resolver_json = serde_json::json!({
+        "version": "2025.10",
+        "sets": {
+            "base": {
+                "sources": [
+                    {
+                        "base": {
+                            "button": {
+                                "$type": "dimension",
+                                "$root": {
+                                    "$value": { "value": 8, "unit": "px" }
+                                },
+                                "md": {
+                                    "$value": { "value": 16, "unit": "px" }
+                                }
+                            }
+                        },
+                        "theme": {
+                            "$extends": "{base}",
+                            "button": {
+                                "lg": {
+                                    "$type": "dimension",
+                                    "$value": { "$ref": "#/base/button/$root/$value" }
+                                }
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+        "resolutionOrder": [
+            { "$ref": "#/sets/base" }
+        ]
+    });
+
+    let resolver = Resolver::from_json(&resolver_json.to_string())
+        .expect("resolver should parse from inline fixture");
+
+    let output = resolve_to_finalized_pipeline(
+        &resolver,
+        ResolvePipelineRequest::with_defaults(ResolutionInput::new()),
+    )
+    .expect("finalized pipeline should succeed");
+
+    assert!(
+        output.parser_diagnostics.is_empty(),
+        "unexpected parse diagnostics: {:#?}",
+        output.parser_diagnostics
+    );
+    assert!(
+        output.graph_diagnostics.is_empty(),
+        "unexpected graph diagnostics: {:#?}",
+        output.graph_diagnostics
+    );
+
+    let inherited_root = output
+        .emittable_tokens
+        .iter()
+        .find(|token| token.path == TokenPath::from_segments(["theme", "button", "$root"]))
+        .expect("theme.button.$root should exist via group extension");
+
+    assert!(
+        matches!(
+            inherited_root.value,
+            EmittableValue::Literal(IrTokenValue::Dimension(_))
+        ),
+        "inherited $root token should be a literal dimension"
+    );
+
+    let lg = output
+        .emittable_tokens
+        .iter()
+        .find(|token| token.path == TokenPath::from_segments(["theme", "button", "lg"]))
+        .expect("theme.button.lg should exist");
+
+    match &lg.value {
+        EmittableValue::Alias { target_path } => {
+            assert_eq!(
+                target_path,
+                &TokenPath::from_segments(["base", "button", "$root"])
+            );
+        }
+        other => panic!("expected alias for theme.button.lg, got {other:?}"),
+    }
 }

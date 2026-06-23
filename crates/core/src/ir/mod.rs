@@ -8,6 +8,7 @@ pub mod node;
 pub mod path;
 pub mod reference;
 pub mod resolver;
+pub mod token;
 pub mod utility;
 
 pub use common::*;

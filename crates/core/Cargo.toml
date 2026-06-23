@@ -6,7 +6,12 @@ authors.workspace = true
 edition.workspace = true
 
 [dependencies]
-petgraph = { version = "0.8.3", features = ["serde-1", "dot_parser"] }
+ordered-float = "5.3.0"
+petgraph = { version = "0.8.3", features = [
+    "serde-1",
+    "dot_parser",
+    "graphmap",
+] }
 regex = "1.12.3"
 schemars = { version = "1.0.2", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }

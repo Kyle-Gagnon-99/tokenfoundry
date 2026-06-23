@@ -4,7 +4,7 @@ use tokenfoundry_core::{
         IrNode, IrTokenType, TokenPath, TokenValue, find_node_by_path, find_token_by_path,
         token_exists,
     },
-    parser::parse_document,
+    parsing::parse_document,
 };
 
 const FULL_SPECTRUM_FIXTURE: &str =

@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::output::css::context::CssConfigOptions;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub enum LogLevel {
     /// Log everything (including debug messages)
@@ -24,14 +26,6 @@ pub enum LogLevel {
 pub struct BaseConfigMeta {
     /// A path to a configuration file to extend from. This allows you to have a base configuration file that can be extended by other configuration files, which is useful for sharing common configuration options across multiple projects or environments.
     pub extends: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-pub struct CssConfig {
-    /// Whether to enable transforming tokens to CSS custom properties. If enabled, tokens will be transformed to CSS custom properties (e.g., a token named "color-primary" would be transformed to "--color-primary"). If not enabled, tokens will not be transformed to CSS custom properties.
-    pub enabled: Option<bool>,
-    /// The prefix to use for CSS custom properties. For example, if the prefix is "tf", then a token named "color-primary" would be transformed to "--tf-color-primary".
-    pub prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -52,7 +46,7 @@ pub struct Config {
     pub log_level: Option<LogLevel>,
 
     /// The CSS configuration options. This allows you to configure how tokens are transformed to CSS custom properties.
-    pub css: Option<CssConfig>,
+    pub css: Option<CssConfigOptions>,
 
     /// The Tailwind CSS configuration options. This allows you to configure how tokens are transformed to Tailwind CSS custom properties.
     pub tailwind: Option<TailwindConfig>,

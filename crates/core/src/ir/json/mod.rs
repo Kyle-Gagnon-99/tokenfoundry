@@ -1,13 +1,18 @@
 //! The `json` module provides IR data structures for JSON values
 
-use crate::{ParserContext, errors::DiagnosticCode};
+use crate::{
+    errors::{DiagnosticCode, ParseDiagnosticCode},
+    ir::JsonPointer,
+    parsing::ParserContext,
+};
 
 pub mod utils;
 
+use serde_json::Value;
 pub use utils::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DiagnosticOwnership {
+pub enum DiagnosticEmission {
     /// A diagnostic was already emitted for this error, so no additional diagnostics should be emitted.
     Emitted,
     /// No diagnostic has been emitted for this error, so the caller is responsible for emitting a diagnostic.
@@ -15,52 +20,112 @@ pub enum DiagnosticOwnership {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InvalidReason {
-    WrongShape,
-    MissingRequiredField,
-    InvalidFieldType,
-    InvalidValue,
-    InvalidReference,
-    Other,
+pub struct ParseFailure {
+    pub kind: ParseFailureKind,
+    pub diagnostic: DiagnosticEmission,
+}
+
+impl ParseFailure {
+    pub fn silent(kind: ParseFailureKind) -> Self {
+        Self {
+            kind,
+            diagnostic: DiagnosticEmission::Silent,
+        }
+    }
+
+    pub fn emitted(kind: ParseFailureKind) -> Self {
+        Self {
+            kind,
+            diagnostic: DiagnosticEmission::Emitted,
+        }
+    }
+
+    pub fn mark_emitted(&mut self) -> Self {
+        self.diagnostic = DiagnosticEmission::Emitted;
+        self.clone()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseInvalid {
-    pub reason: InvalidReason,
-    pub ownership: DiagnosticOwnership,
+pub enum JsonValueKind {
+    String,
+    Number,
+    Object,
+    Array,
+    Bool,
+    Null,
+}
+
+impl From<Value> for JsonValueKind {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::String(_) => JsonValueKind::String,
+            Value::Number(_) => JsonValueKind::Number,
+            Value::Object(_) => JsonValueKind::Object,
+            Value::Array(_) => JsonValueKind::Array,
+            Value::Bool(_) => JsonValueKind::Bool,
+            Value::Null => JsonValueKind::Null,
+        }
+    }
+}
+
+impl From<&Value> for JsonValueKind {
+    fn from(value: &Value) -> Self {
+        match value {
+            Value::String(_) => JsonValueKind::String,
+            Value::Number(_) => JsonValueKind::Number,
+            Value::Object(_) => JsonValueKind::Object,
+            Value::Array(_) => JsonValueKind::Array,
+            Value::Bool(_) => JsonValueKind::Bool,
+            Value::Null => JsonValueKind::Null,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseFailureKind {
+    WrongType {
+        expected: JsonValueKind,
+        actual: JsonValueKind,
+    },
+    MissingRequiredField {
+        field: String,
+    },
+    MissingRequiredFields {
+        fields: Vec<String>,
+    },
+    InvalidValue,
+    InvalidReference,
 }
 
 /// Represents the result of trying to parse a JSON value into a specific type. This is used as the return type for the `try_from_json` method of the
 /// `TryFromJson` trait. If the value was successfully parsed into the expected type, `Parsed` should be returned.
 /// If the value was not in the expected format but is still valid JSON, `NoMatch` should be returned (indicating that this parser did not match the value, but other parsers may still be able to parse it).
-/// If the value was not in the expected format and is not valid for this type, `Invalid` should be returned, and any relevant diagnostic errors should have already been pushed to the `Parser
+/// If the value was not in the expected format and is not valid for this type, `Failed` should be returned, and any relevant diagnostic errors should have already been pushed to the `ParserContext`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseState<T> {
+    /// The value was successfully parsed into the expected type, and the parsed value is included.
     Parsed(T),
+    /// The parser does not match, but the value is still valid JSON, so let other parsers try to parse this value.
     NoMatch,
-    Invalid(ParseInvalid),
+    /// The value was not in the expected format and is not valid for this type, so the parsing failed
+    Failed(ParseFailure),
 }
 
 impl<T> ParseState<T> {
-    pub fn invalid_emitted(reason: InvalidReason) -> Self {
-        ParseState::Invalid(ParseInvalid {
-            reason,
-            ownership: DiagnosticOwnership::Emitted,
-        })
+    pub fn failed_silent(kind: ParseFailureKind) -> Self {
+        Self::Failed(ParseFailure::silent(kind))
     }
 
-    pub fn invalid_silent(reason: InvalidReason) -> Self {
-        ParseState::Invalid(ParseInvalid {
-            reason,
-            ownership: DiagnosticOwnership::Silent,
-        })
+    pub fn failed_emitted(kind: ParseFailureKind) -> Self {
+        Self::Failed(ParseFailure::emitted(kind))
     }
 }
 
 /// Allows a struct to be converted / created from a JSON value, with error handling through the `ParserContext`.
 pub trait TryFromJson<'a>: Sized {
     /// Tries to create an instance of `Self` from a JSON value. If the JSON value is not in the expected format, any diagnostic errors should be pushed
-    /// to the `ParserContext`, and `None` should be returned.
+    /// to the `ParserContext`, and `ParseState::Failed` should be returned.
     ///
     /// The `path` argument is a JSON pointer string that indicates the location of the value being parsed within the overall JSON structure.
     /// This is useful for error reporting, as it allows the parser to indicate exactly where in the input JSON the error occurred.
@@ -73,11 +138,11 @@ pub trait TryFromJson<'a>: Sized {
     ///
     /// # Returns
     ///
-    /// An `Option<Self>` which is `Some(instance)` if the JSON value was successfully parsed into an instance of `Self`,
-    /// or `None` if the JSON value was not able to be parsed (in which case any errors should have already been pushed to the `ParserContext`).
+    /// ParseState<Self> if the JSON was successfully parsed into an instance of `Self`, or `ParseState::Failed` if the JSON was not in the expected format
+    /// or was invalid for this type. Any relevant diagnostic errors should have already been pushed to the `ParserContext`.
     fn try_from_json(
         ctx: &mut ParserContext,
-        path: &str,
+        path: &JsonPointer,
         value: &'a serde_json::Value,
     ) -> ParseState<Self>;
 }
@@ -85,7 +150,7 @@ pub trait TryFromJson<'a>: Sized {
 /// A helper enum to represent a JSON number than can be any range from i64::MIN to u64::MAX, as well as f64 values.
 /// This is useful for parsing numeric values from JSON where the number could be anything, and we need to support
 /// the full range of JSON numbers without losing precision or causing overflow issues.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct JsonNumber(pub serde_json::Number);
 
 impl JsonNumber {
@@ -104,12 +169,15 @@ impl JsonNumber {
 impl<'a> TryFromJson<'a> for JsonNumber {
     fn try_from_json(
         _ctx: &mut ParserContext,
-        _path: &str,
+        _path: &JsonPointer,
         value: &'a serde_json::Value,
     ) -> ParseState<Self> {
         match value {
             serde_json::Value::Number(num) => ParseState::Parsed(JsonNumber(num.clone())),
-            _ => ParseState::invalid_silent(InvalidReason::InvalidFieldType),
+            _ => ParseState::failed_silent(ParseFailureKind::WrongType {
+                expected: JsonValueKind::Number,
+                actual: JsonValueKind::from(value),
+            }),
         }
     }
 }
@@ -117,6 +185,7 @@ impl<'a> TryFromJson<'a> for JsonNumber {
 /// A helper struct to represent a JSON object, which is just a wrapper around `serde_json::Map<String, Value>`.
 /// Should not be used directly, but useful for utility functions that need to work with JSON objects
 /// more specifically, the `serde_json::Map<String, Value>` with custom error handling.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct JsonObject<'a>(pub &'a serde_json::Map<String, serde_json::Value>);
 
 impl<'a> JsonObject<'a> {
@@ -208,30 +277,33 @@ impl<'a> JsonObject<'a> {
     pub fn required_field<T: TryFromJson<'a>>(
         &self,
         ctx: &mut ParserContext,
-        path: &str,
+        path: &mut JsonPointer,
         field_name: &str,
     ) -> Option<T> {
-        let field_path = format!("{}/{}", path, field_name);
+        let field_path = path.with_segment(field_name);
 
         let value = match self.get(field_name) {
             Some(v) => v,
             None => {
-                ctx.push_to_errors(
-                    DiagnosticCode::MissingRequiredProperty,
-                    format!("Missing required field '{}' at {}", field_name, path),
-                    field_path,
-                );
+                ctx.diagnostics()
+                    .error(DiagnosticCode::Parse(
+                        ParseDiagnosticCode::MissingRequiredField {
+                            field: field_name.to_string(),
+                        },
+                    ))
+                    .json_pointer(field_path.clone())
+                    .emit();
                 return None;
             }
         };
 
         match T::try_from_json(ctx, &field_path, value) {
             ParseState::Parsed(v) => Some(v),
-            ParseState::Invalid(inv) => {
+            ParseState::Failed(inv) => {
                 // The caller may have already emitted an error for this invalid field, so only emit an error if the ownership is `Silent`.
                 // If the ownership is `Emitted`, that means the caller has already emitted an error for this invalid field, so we should not
                 // emit another error to avoid duplicate errors for the same issue.
-                if inv.ownership == DiagnosticOwnership::Silent {
+                if inv.ownership == DiagnosticEmission::Silent {
                     ctx.push_to_errors(
                         DiagnosticCode::InvalidPropertyType,
                         format!("Invalid property type for field '{}'", field_name),
@@ -274,8 +346,8 @@ impl<'a> JsonObject<'a> {
         let actual_field_path = format!("{}/{}", path, actual_name);
         match T::try_from_json(ctx, &actual_field_path, value) {
             ParseState::Parsed(v) => Some(v),
-            ParseState::Invalid(inv) => {
-                if inv.ownership == DiagnosticOwnership::Silent {
+            ParseState::Failed(inv) => {
+                if inv.ownership == DiagnosticEmission::Silent {
                     ctx.push_to_errors(
                         DiagnosticCode::InvalidPropertyType,
                         format!("Invalid property type for field '{}'", canonical_name),
@@ -323,11 +395,11 @@ impl<'a> JsonObject<'a> {
 
         match T::try_from_json(ctx, &field_path, value) {
             ParseState::Parsed(v) => Some(v),
-            ParseState::Invalid(inv) => {
+            ParseState::Failed(inv) => {
                 // The caller may have already emitted an error for this invalid field, so only emit an error if the ownership is `Silent`.
                 // If the ownership is `Emitted`, that means the caller has already emitted an error for this invalid field, so we should not
                 // emit another error to avoid duplicate errors for the same issue.
-                if inv.ownership == DiagnosticOwnership::Silent {
+                if inv.ownership == DiagnosticEmission::Silent {
                     ctx.push_to_errors(
                         DiagnosticCode::InvalidPropertyType,
                         format!("Invalid property type for field '{}'", field_name),
@@ -371,8 +443,8 @@ impl<'a> JsonObject<'a> {
         let actual_field_path = format!("{}/{}", path, actual_name);
         match T::try_from_json(ctx, &actual_field_path, value) {
             ParseState::Parsed(v) => Some(v),
-            ParseState::Invalid(inv) => {
-                if inv.ownership == DiagnosticOwnership::Silent {
+            ParseState::Failed(inv) => {
+                if inv.ownership == DiagnosticEmission::Silent {
                     ctx.push_to_errors(
                         DiagnosticCode::InvalidPropertyType,
                         format!("Invalid property type for field '{}'", canonical_name),
