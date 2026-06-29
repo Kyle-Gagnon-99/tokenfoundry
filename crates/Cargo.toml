@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["cli", "core"]
+members = ["cli", "core", "json-spanned"]
 
 [workspace.package]
 authors = ["Kyle Gagnon"]

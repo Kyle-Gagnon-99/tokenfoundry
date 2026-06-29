@@ -1,0 +1,10 @@
+[package]
+name = "json-spanned"
+version = "0.1.0"
+description = "A JSON parser that preserves the original source code's span information."
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+chumsky = "0.13.0"
+logos = "0.16.1"

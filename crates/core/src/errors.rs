@@ -3,8 +3,6 @@
 //! token parsing, transformation, and generation. These error types can provide
 //! more specific and informative error messages to help users understand and resolve issues with their tokens.
 
-use crate::ir::{JsonPointer, TokenPath};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub enum Severity {
     Error,
@@ -45,9 +43,6 @@ pub struct Diagnostic {
     pub severity: Severity,
     pub phase: DiagnosticPhase,
     pub code: DiagnosticCode,
-
-    pub token_path: Option<TokenPath>,
-    pub json_pointer: Option<JsonPointer>,
 
     pub help: Option<String>,
 }
@@ -91,8 +86,6 @@ impl DiagnosticReport {
 pub struct DiagnosticScope<'a> {
     reporter: &'a mut DiagnosticReporter,
     phase: DiagnosticPhase,
-    token_path: Option<TokenPath>,
-    json_pointer: Option<JsonPointer>,
 }
 
 impl<'a> DiagnosticScope<'a> {
@@ -104,18 +97,8 @@ impl<'a> DiagnosticScope<'a> {
         DiagnosticBuilder::new(self, Severity::Warning, code)
     }
 
-    pub fn new(
-        reporter: &'a mut DiagnosticReporter,
-        phase: DiagnosticPhase,
-        token_path: Option<TokenPath>,
-        json_pointer: Option<JsonPointer>,
-    ) -> Self {
-        Self {
-            reporter,
-            phase,
-            token_path,
-            json_pointer,
-        }
+    pub fn new(reporter: &'a mut DiagnosticReporter, phase: DiagnosticPhase) -> Self {
+        Self { reporter, phase }
     }
 }
 
@@ -135,8 +118,6 @@ impl<'scope, 'reporter> DiagnosticBuilder<'scope, 'reporter> {
                 severity,
                 phase: scope.phase,
                 code,
-                token_path: scope.token_path.clone(),
-                json_pointer: scope.json_pointer.clone(),
                 help: None,
             },
             scope,
@@ -145,16 +126,6 @@ impl<'scope, 'reporter> DiagnosticBuilder<'scope, 'reporter> {
 
     pub fn help(mut self, help: impl Into<String>) -> Self {
         self.diagnostic.help = Some(help.into());
-        self
-    }
-
-    pub fn token_path(mut self, token_path: TokenPath) -> Self {
-        self.diagnostic.token_path = Some(token_path);
-        self
-    }
-
-    pub fn json_pointer(mut self, json_pointer: JsonPointer) -> Self {
-        self.diagnostic.json_pointer = Some(json_pointer);
         self
     }
 

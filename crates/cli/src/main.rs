@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use tokenfoundry_core::{
     config::LogLevel as CoreLogLevel,
     config::{BaseConfigMeta, Config},
-    errors::Diagnostic as CoreDiagnostic,
 };
 use tracing::debug;
 use tracing_subscriber::EnvFilter;
@@ -120,29 +119,6 @@ fn build_extended_config(config_file: &Path) -> Figment {
         }
     }
     figment.merge(Toml::file(config_file))
-}
-
-fn render_diagnostics(title: &str, diagnostics: &[CoreDiagnostic]) -> miette::Report {
-    let body = diagnostics
-        .iter()
-        .map(|diagnostic| match &diagnostic.file_path {
-            Some(file_path) => format!(
-                "  - {:?}[{:?}] {} {}: {}",
-                diagnostic.severity,
-                diagnostic.code,
-                file_path,
-                diagnostic.path,
-                diagnostic.message
-            ),
-            None => format!(
-                "  - {:?}[{:?}] {}: {}",
-                diagnostic.severity, diagnostic.code, diagnostic.path, diagnostic.message
-            ),
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    miette!("{title}\n{body}")
 }
 
 fn main() -> Result<()> {

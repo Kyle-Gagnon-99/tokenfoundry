@@ -8,8 +8,6 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::output::css::context::CssConfigOptions;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub enum LogLevel {
     /// Log everything (including debug messages)
@@ -45,9 +43,6 @@ pub struct Config {
     #[serde(rename = "logLevel")]
     pub log_level: Option<LogLevel>,
 
-    /// The CSS configuration options. This allows you to configure how tokens are transformed to CSS custom properties.
-    pub css: Option<CssConfigOptions>,
-
     /// The Tailwind CSS configuration options. This allows you to configure how tokens are transformed to Tailwind CSS custom properties.
     pub tailwind: Option<TailwindConfig>,
 }
@@ -57,7 +52,6 @@ impl Default for Config {
         Self {
             extends: None,
             log_level: Some(LogLevel::Info),
-            css: None,
             tailwind: None,
         }
     }
