@@ -84,6 +84,42 @@ pub struct JsonNumber {
     n: Number,
 }
 
+impl JsonNumber {
+    /// The underlying number representation.
+    pub fn number(&self) -> Number {
+        self.n
+    }
+
+    /// Whether the source number was written as an integer (no fraction or exponent).
+    pub fn is_integer(&self) -> bool {
+        !matches!(self.n, Number::Float(_))
+    }
+
+    /// The number as an `f64`. Integers beyond 2^53 may lose precision.
+    pub fn as_f64(&self) -> f64 {
+        match self.n {
+            Number::PosInt(u) => u as f64,
+            Number::NegInt(i) => i as f64,
+            Number::Float(f) => f,
+        }
+    }
+
+    pub fn as_u64(&self) -> Option<u64> {
+        match self.n {
+            Number::PosInt(u) => Some(u),
+            _ => None,
+        }
+    }
+
+    pub fn as_i64(&self) -> Option<i64> {
+        match self.n {
+            Number::PosInt(u) => i64::try_from(u).ok(),
+            Number::NegInt(i) => Some(i),
+            Number::Float(_) => None,
+        }
+    }
+}
+
 impl TryFrom<&str> for JsonNumber {
     type Error = NumberParseError;
 
@@ -122,31 +158,35 @@ impl TryFrom<&str> for JsonNumber {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct JsonMember<'source> {
-    pub key: Spanned<&'source str>,
-    pub value: Spanned<JsonValue<'source>>,
+impl TryFrom<String> for JsonNumber {
+    type Error = NumberParseError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        JsonNumber::try_from(value.as_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum JsonValue<'source> {
+pub struct JsonMember {
+    pub key: Spanned<String>,
+    pub value: Spanned<JsonValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum JsonValue {
     Null,
     Boolean(bool),
     Number(JsonNumber),
-    String(&'source str),
-    Array(Vec<Spanned<JsonValue<'source>>>),
-    Object(Vec<JsonMember<'source>>),
+    String(String),
+    Array(Vec<Spanned<JsonValue>>),
+    Object(Vec<JsonMember>),
     Invalid,
 }
 
-pub fn parser<'source, I>() -> impl Parser<
-    'source,
-    I,
-    Spanned<JsonValue<'source>>,
-    chumsky::extra::Err<Rich<'source, Token<'source>>>,
->
+pub fn parser<'source, I>()
+-> impl Parser<'source, I, Spanned<JsonValue>, chumsky::extra::Err<Rich<'source, Token>>>
 where
-    I: ValueInput<'source, Token = Token<'source>, Span = SimpleSpan>,
+    I: ValueInput<'source, Token = Token, Span = SimpleSpan>,
 {
     recursive(|value| {
         let null = just(Token::Null).to(JsonValue::Null);
@@ -154,7 +194,7 @@ where
             .to(JsonValue::Boolean(true))
             .or(just(Token::Boolean(false)).to(JsonValue::Boolean(false)));
         let number = select! { Token::Number(raw) => raw }.try_map(
-            |raw, span| -> Result<JsonValue<'source>, Rich<'source, Token<'source>>> {
+            |raw, span| -> Result<JsonValue, Rich<Token>> {
                 JsonNumber::try_from(raw)
                     .map(JsonValue::Number)
                     .map_err(|e| Rich::custom(span, e.to_string()))
@@ -173,12 +213,7 @@ where
             .boxed();
 
         let key = select! { Token::String(s) => s }
-            .try_map(|s, span| {
-                Ok::<Spanned<&'source str>, Rich<'source, Token<'source>>>(Spanned {
-                    value: s,
-                    span,
-                })
-            })
+            .try_map(|s, span| Ok::<Spanned<String>, Rich<Token>>(Spanned { value: s, span }))
             .boxed();
 
         let member = key
@@ -202,7 +237,7 @@ where
                     .recover_with(skip_then_retry_until(any().ignored(), end())),
             )
             .try_map(|items, span| {
-                Ok::<Spanned<JsonValue<'source>>, Rich<'source, Token<'source>>>(Spanned {
+                Ok::<Spanned<JsonValue>, Rich<Token>>(Spanned {
                     value: JsonValue::Array(items),
                     span,
                 })
@@ -226,7 +261,7 @@ where
                         .recover_with(skip_then_retry_until(any().ignored(), end())),
                 )
                 .try_map(|members, span| {
-                    Ok::<Spanned<JsonValue<'source>>, Rich<'source, Token<'source>>>(Spanned {
+                    Ok::<Spanned<JsonValue>, Rich<Token>>(Spanned {
                         value: JsonValue::Object(members),
                         span,
                     })
@@ -267,7 +302,7 @@ mod tests {
 
     use crate::lexer::lex_json;
 
-    fn parse_json(input: &str) -> Result<Spanned<JsonValue<'_>>, Vec<Rich<'_, Token<'_>>>> {
+    fn parse_json(input: &str) -> Result<Spanned<JsonValue>, Vec<Rich<'_, Token>>> {
         let tokens = lex_json(input).collect::<Vec<_>>();
         parser()
             .parse(IterInput::new(
@@ -325,7 +360,7 @@ mod tests {
         };
 
         assert_eq!(members.len(), 1);
-        assert_eq!(members[0].key.value, "\"x\"");
+        assert_eq!(members[0].key.value, "x");
         assert_eq!(members[0].key.span, SimpleSpan::new((), 4..7));
         assert_eq!(members[0].value.span, SimpleSpan::new((), 8..12));
         assert!(matches!(members[0].value.value, JsonValue::Boolean(true)));
@@ -542,11 +577,11 @@ mod tests {
         };
 
         assert!(
-            members.iter().any(|m| m.key.value == "\"ok1\""),
+            members.iter().any(|m| m.key.value == "ok1"),
             "expected parser to keep valid members despite nearby errors"
         );
         assert!(
-            members.iter().any(|m| m.key.value == "\"ok2\""),
+            members.iter().any(|m| m.key.value == "ok2"),
             "expected parser to recover and keep later valid members"
         );
     }

@@ -2,7 +2,7 @@
 //! This is useful for applications that need to provide detailed error messages or perform transformations on JSON data while
 //! maintaining a connection to the original source code.
 
-use chumsky::{Parser, error::Rich, input::IterInput, span::SimpleSpan, span::Span};
+use chumsky::{Parser, error::Rich, input::IterInput, prelude::end, span::SimpleSpan, span::Span};
 
 use crate::{
     lexer::{Token, lex_json},
@@ -12,26 +12,56 @@ use crate::{
 pub mod lexer;
 pub mod parser;
 
-/// Parses a JSON string and returns a `Spanned<JsonValue>` if successful, or a vector of `Rich` errors if parsing fails.
-/// `parse_json` is a zero-copy parser, so the `'source` lifetime is tied to the input string.
+/// Parses a JSON string, recovering from syntax errors where possible.
+///
+/// Returns the (possibly partial) tree together with every error found. The tree is `Some` whenever
+/// recovery produced one, so callers should check the error list rather than the `Option` to
+/// decide whether the input was valid. Content after the root value is reported as an error.
 ///
 /// # Arguments
 ///
 /// * `input`: A string slice containing the JSON data to be parsed.
-///
-/// # Returns
-///
-/// The function returns a `Result` which is:
-/// - `Ok(Spanned<JsonValue<'source>>)` if parsing is successful, where `Spanned<JsonValue<'source>>` contains the parsed JSON value along with its span information.
-/// - `Err(Vec<Rich<'source, Token<'source>>>)` if parsing fails, where `Vec<Rich<'source, Token<'source>>>` contains detailed error information about the parsing failure.
-pub fn parse_json<'source>(
-    input: &'source str,
-) -> Result<Spanned<JsonValue<'source>>, Vec<Rich<'source, Token<'source>>>> {
+pub fn parse_json(input: &str) -> (Option<Spanned<JsonValue>>, Vec<Rich<'_, Token>>) {
     let tokens = lex_json(input).collect::<Vec<_>>();
     parser()
+        .then_ignore(end())
         .parse(IterInput::new(
             tokens.into_iter(),
             SimpleSpan::new((), input.len()..input.len()),
         ))
-        .into_result()
+        .into_output_errors()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_input_has_no_errors() {
+        let (value, errors) = parse_json(r#"{"$value": 1}"#);
+        assert!(errors.is_empty());
+        let JsonValue::Object(members) = value.unwrap().value else {
+            panic!("expected object");
+        };
+        assert_eq!(members[0].key.value, "$value");
+    }
+
+    #[test]
+    fn trailing_content_is_an_error() {
+        let (_, errors) = parse_json("{} garbage");
+        assert!(!errors.is_empty());
+    }
+
+    #[test]
+    fn recovery_returns_partial_tree_and_errors() {
+        let (value, errors) = parse_json(r#"{"a": 1, "b": [1,, 2]}"#);
+        assert!(value.is_some());
+        assert!(!errors.is_empty());
+    }
+
+    #[test]
+    fn unterminated_string_is_an_error() {
+        let (_, errors) = parse_json(r#"{"a": "oops}"#);
+        assert!(!errors.is_empty());
+    }
 }

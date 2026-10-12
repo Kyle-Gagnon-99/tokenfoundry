@@ -19,6 +19,9 @@ serde_json = "1.0.149"
 serde_spanned = "1.1.1"
 thiserror = "2.0.17"
 tracing = "0.1.44"
+json-spanned = { path = "../json-spanned" }
+percent-encoding = "2.3.2"
+indexmap = "2.14.2"
 
 [dev-dependencies]
 test-log = { version = "0.2.20", features = ["trace"] }

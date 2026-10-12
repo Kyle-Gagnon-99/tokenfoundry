@@ -4,6 +4,12 @@
 //! for parsing, transforming, and generating tokens in different formats, while the CLI will provide a command-line interface
 //! for users to interact with the core functionality.
 
+pub(crate) mod ast;
+pub mod compiler;
 pub mod config;
-pub mod errors;
-pub mod raw;
+pub(crate) mod diagnostics;
+pub(crate) mod errors;
+pub(crate) mod ir;
+pub mod resolver;
+pub(crate) mod source;
+pub(crate) mod utils;
