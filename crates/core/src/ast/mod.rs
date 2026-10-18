@@ -5,10 +5,8 @@
 //! are valid, that there are no ambiguous objects. The AST is not fully validated to ensure that references are valid, all tokens are defined, and
 //! more.
 
-pub(crate) mod document;
-pub(crate) mod group;
 pub(crate) mod node;
 pub(crate) mod reference;
-pub(crate) mod span;
-pub(crate) mod types;
-pub(crate) mod value;
+pub mod token;
+pub mod types;
+pub mod value;

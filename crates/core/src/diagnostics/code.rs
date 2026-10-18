@@ -12,11 +12,23 @@ pub enum DiagnosticCode {
     InvalidJsonSyntax = 1,
     DuplicateKeyInJson = 2,
     // 1xxx: DTCG shape errors
+    TokenValueAndRef = 1001,
+    InvalidPropertyShape = 1002,
+    InvalidName = 1003,
+    InvalidNodeShape = 1004,
     // 2xxx: Reference errors
+    InvalidReference = 2001,
+    UnresolvedReference = 2002,
+    ReferenceCycle = 2003,
+    InvalidReferenceTarget = 2004,
     // 3xxx: Token value validation errors
+    UnresolvedType = 3001,
     // 4xxx: Extends / merging errors
     InvalidMergeRoot = 4001,
     GroupTokenConflict = 4002,
+    UnresolvedExtends = 4003,
+    ExtendsCycle = 4004,
+    InvalidExtendsTarget = 4005,
     // 5xxx: Resolver errors
     // 6xxx: Output errors
     // 7xxx: Configuration / CLI errors
@@ -145,6 +157,78 @@ impl DiagnosticCode {
                 category: self.category(),
                 title: "Group and Token Conflict",
                 doc_slug: "group-token-conflict",
+            },
+            Self::TokenValueAndRef => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Token Has Both $value and $ref",
+                doc_slug: "token-value-and-ref",
+            },
+            Self::InvalidPropertyShape => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Invalid Property Shape",
+                doc_slug: "invalid-property-shape",
+            },
+            Self::InvalidName => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Invalid Name",
+                doc_slug: "invalid-name",
+            },
+            Self::InvalidNodeShape => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Invalid Node Shape",
+                doc_slug: "invalid-node-shape",
+            },
+            Self::InvalidReference => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Invalid Reference",
+                doc_slug: "invalid-reference",
+            },
+            Self::UnresolvedReference => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Unresolved Reference",
+                doc_slug: "unresolved-reference",
+            },
+            Self::ReferenceCycle => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Reference Cycle",
+                doc_slug: "reference-cycle",
+            },
+            Self::InvalidReferenceTarget => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Invalid Reference Target",
+                doc_slug: "invalid-reference-target",
+            },
+            Self::UnresolvedType => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Unresolved Type",
+                doc_slug: "unresolved-type",
+            },
+            Self::UnresolvedExtends => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Unresolved Extends",
+                doc_slug: "unresolved-extends",
+            },
+            Self::ExtendsCycle => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Extends Cycle",
+                doc_slug: "extends-cycle",
+            },
+            Self::InvalidExtendsTarget => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Invalid Extends Target",
+                doc_slug: "invalid-extends-target",
             },
             Self::InternalError => DiagnosticCodeInfo {
                 default_severity,

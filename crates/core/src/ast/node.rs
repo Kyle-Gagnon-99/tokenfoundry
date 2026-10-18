@@ -3,18 +3,10 @@
 //! Typically tokens and groups share the same metadata types (such as description, type, and so on), so this module consolidates the definitions of these
 //! shared types.
 
-use std::collections::HashMap;
+use crate::{ir::lower::PropId, source::SourceSpan};
 
-use json_spanned::parser::JsonMember;
-
-//use crate::ast::token::DtcgTypeSyntax;
-
-/// CommonNodeProperties contains the common properties shared by both tokens and groups in DTCG.
-/// These properties include description, deprecation status, token type, and any extensions.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommonNodeProperties {
-    pub description: Option<String>,
-    pub deprecated: Option<bool>,
-    //pub token_type: Option<DtcgTypeSyntax>,
-    pub extensions: Option<HashMap<String, JsonMember>>,
+pub struct Node<T> {
+    pub value: T,
+    pub id: PropId,
+    pub span: SourceSpan,
 }

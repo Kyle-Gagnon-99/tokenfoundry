@@ -164,6 +164,11 @@ impl JsonPointer {
         self.segments.push(segment);
     }
 
+    /// Removes and returns the last segment, if any.
+    pub fn pop(&mut self) -> Option<String> {
+        self.segments.pop()
+    }
+
     /// Creates a `JsonPointer` from an iterator of segments.
     pub fn from_segments<I, S>(segments: I) -> Self
     where

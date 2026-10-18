@@ -48,18 +48,75 @@ pub struct MergedGroup {
 }
 
 impl MergedGroup {
-    /// Looks up a child by walking a path of names from this group.
-    pub fn get(&self, path: &[&str]) -> Option<&MergedNode> {
-        let (first, rest) = path.split_first()?;
-        let node = self.children.get(*first)?;
+    /// Looks up a group or token by walking the pointer's segments through `children`.
+    /// It stops at tokens, it never looks inside one. See [`MergedGroup::resolve`] for that.
+    pub fn get(&self, path: &JsonPointer) -> Option<&MergedNode> {
+        Self::get_segments(self, path.segments())
+    }
+
+    fn get_segments<'a>(group: &'a MergedGroup, segments: &[String]) -> Option<&'a MergedNode> {
+        let (first, rest) = segments.split_first()?;
+        let node = group.children.get(first)?;
         if rest.is_empty() {
             return Some(node);
         }
         match node {
-            MergedNode::Group(group) => group.get(rest),
+            MergedNode::Group(sub) => Self::get_segments(sub, rest),
             _ => None,
         }
     }
+
+    /// Resolves a pointer against the merged tree and returns the raw node it designates.
+    ///
+    /// The walk has two phases. First the segments are followed through merged groups (`children`, or `props`
+    /// for a `$`-member such as `$type`). Once a token or property is reached, the remaining segments walk the
+    /// winning raw node in the arena by object key or array index. Nodes that lost the merge are unreachable.
+    ///
+    /// Returns `None` for a path that does not exist, and for one that ends on a group or the root, since a
+    /// merged group has no single raw node.
+    pub fn resolve(&self, arena: &Arena, path: &JsonPointer) -> Option<NodeId> {
+        let mut group = self;
+        let mut segments = path.segments();
+
+        loop {
+            let (first, rest) = segments.split_first()?;
+
+            if let Some(prop) = group.props.get(first) {
+                return resolve_raw(arena, *prop, rest);
+            }
+
+            match group.children.get(first)? {
+                MergedNode::Group(sub) => {
+                    group = sub;
+                    segments = rest;
+                }
+                MergedNode::Token { node, .. } | MergedNode::Malformed(node) => {
+                    return resolve_raw(arena, *node, rest);
+                }
+            }
+        }
+    }
+}
+
+/// Follows `segments` from `node` through raw objects (last duplicate key wins) and arrays (decimal index).
+fn resolve_raw(arena: &Arena, mut node: NodeId, segments: &[String]) -> Option<NodeId> {
+    for segment in segments {
+        node = match &arena.get(node).value {
+            DtcgValueSyntax::Object(members) => {
+                members.iter().rev().find(|m| m.key.value == *segment)?.value
+            }
+            DtcgValueSyntax::Array(items) => {
+                // RFC 6901: no sign and no leading zeros, so `01` and `+1` are not indexes.
+                let valid = segment == "0" || !segment.starts_with('0');
+                if !valid || !segment.bytes().all(|b| b.is_ascii_digit()) {
+                    return None;
+                }
+                *items.get(segment.parse::<usize>().ok()?)?
+            }
+            _ => return None,
+        };
+    }
+    Some(node)
 }
 
 #[derive(Debug)]
@@ -78,8 +135,8 @@ pub enum MergedNode {
 /// Records that a token was replaced by a later one, so diagnostics can say where the losing value came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shadow {
-    /// The path of names from the root to the replaced token.
-    pub path: Vec<String>,
+    /// The pointer from the root to the replaced token, e.g. `/colors/blue`.
+    pub path: JsonPointer,
     pub loser: NodeId,
     pub loser_layer: usize,
     pub winner: NodeId,
@@ -142,11 +199,11 @@ impl Merged {
             shadows: &mut self.shadows,
             diags,
         };
-        layer_group(&mut self.root, &mut ctx, root, &mut Vec::new());
+        layer_group(&mut self.root, &mut ctx, root, &mut JsonPointer::default());
     }
 }
 
-fn layer_group(group: &mut MergedGroup, ctx: &mut Ctx, obj: NodeId, path: &mut Vec<String>) {
+fn layer_group(group: &mut MergedGroup, ctx: &mut Ctx, obj: NodeId, path: &mut JsonPointer) {
     group.origins.push(obj);
 
     let DtcgValueSyntax::Object(members) = &ctx.arena.get(obj).value else {
@@ -164,7 +221,7 @@ fn layer_group(group: &mut MergedGroup, ctx: &mut Ctx, obj: NodeId, path: &mut V
             continue;
         }
 
-        path.push(key.clone());
+        path.append(key.clone());
 
         if child.is_token_like() {
             if let Some(old) = group.children.get(key) {
@@ -201,13 +258,13 @@ fn layer_group(group: &mut MergedGroup, ctx: &mut Ctx, obj: NodeId, path: &mut V
 
 /// Called when `winner` (a raw node from the current layer) lands on a position that already holds `old`.
 /// Token over token is normal overriding, so it is only recorded. A group and a token colliding is warned about.
-fn replace_report(ctx: &mut Ctx, path: &[String], old: &MergedNode, winner: NodeId) {
+fn replace_report(ctx: &mut Ctx, path: &JsonPointer, old: &MergedNode, winner: NodeId) {
     let winner_node = ctx.arena.get(winner);
 
     match old {
         MergedNode::Token { node, layer } if winner_node.is_token_like() => {
             ctx.shadows.push(Shadow {
-                path: path.to_vec(),
+                path: path.clone(),
                 loser: *node,
                 loser_layer: *layer,
                 winner,
@@ -227,7 +284,7 @@ fn replace_report(ctx: &mut Ctx, path: &[String], old: &MergedNode, winner: Node
 
 fn conflict(
     ctx: &mut Ctx,
-    path: &[String],
+    path: &JsonPointer,
     winner_kind: &str,
     loser_kind: &str,
     winner: NodeId,
@@ -236,8 +293,8 @@ fn conflict(
     ctx.diags.emit(
         Diagnostic::new(DiagnosticCode::GroupTokenConflict)
             .with_message(format!(
-                "`{}` is {loser_kind} in an earlier layer but {winner_kind} in a later one",
-                path.join(".")
+                "`#{}` is {loser_kind} in an earlier layer but {winner_kind} in a later one",
+                path.to_pointer_string()
             ))
             .primary(
                 ctx.arena.get(winner).span.clone(),
@@ -292,7 +349,7 @@ mod tests {
         fn node(&self, path: &[&str]) -> &MergedNode {
             self.merged
                 .root
-                .get(path)
+                .get(&ptr(path))
                 .unwrap_or_else(|| panic!("no node at {path:?}"))
         }
 
@@ -318,6 +375,10 @@ mod tests {
         fn codes(&self) -> Vec<DiagnosticCode> {
             self.diags.diagnostics().iter().map(|d| d.code).collect()
         }
+    }
+
+    fn ptr(segments: &[&str]) -> JsonPointer {
+        JsonPointer::from_segments(segments.iter().copied())
     }
 
     fn keys(group: &MergedGroup) -> Vec<&str> {
@@ -373,7 +434,7 @@ mod tests {
 
         assert_eq!(f.merged.shadows.len(), 1);
         let shadow = &f.merged.shadows[0];
-        assert_eq!(shadow.path, ["a", "b"]);
+        assert_eq!(shadow.path, ptr(&["a", "b"]));
         assert_eq!((shadow.loser_layer, shadow.winner_layer), (0, 1));
         assert_ne!(shadow.loser, shadow.winner);
         assert_eq!(
@@ -432,11 +493,11 @@ mod tests {
         f.layer(r#"{"a": {"$value": 9}}"#);
 
         assert_eq!(f.token_number(&["a"]), 9);
-        assert!(f.merged.root.get(&["a", "b"]).is_none());
+        assert!(f.merged.root.get(&ptr(&["a", "b"])).is_none());
         assert_eq!(f.codes(), [DiagnosticCode::GroupTokenConflict]);
         let diag = &f.diags.diagnostics()[0];
         assert_eq!(diag.labels.len(), 2);
-        assert!(diag.message.contains("`a`"));
+        assert!(diag.message.contains("`#/a`"));
     }
 
     #[test]
@@ -650,9 +711,51 @@ mod tests {
         let mut f = Fixture::new();
         f.layer(r#"{"a": {"b": {"c": {"$value": 1}}}}"#);
 
-        assert!(f.merged.root.get(&["a", "b", "c"]).is_some());
-        assert!(f.merged.root.get(&["a", "x"]).is_none());
-        assert!(f.merged.root.get(&["a", "b", "c", "d"]).is_none());
-        assert!(f.merged.root.get(&[]).is_none());
+        assert!(f.merged.root.get(&ptr(&["a", "b", "c"])).is_some());
+        assert!(f.merged.root.get(&ptr(&["a", "x"])).is_none());
+        assert!(f.merged.root.get(&ptr(&["a", "b", "c", "d"])).is_none());
+        assert!(f.merged.root.get(&ptr(&[])).is_none());
+    }
+
+    #[test]
+    fn resolve_walks_merged_groups_then_the_raw_node() {
+        let mut f = Fixture::new();
+        f.layer(r#"{"c": {"$type": "color", "p": {"$value": {"components": [1, 2, 3]}}}}"#);
+        f.layer(r#"{"c": {"p": {"$value": {"components": [7, 8]}}}}"#);
+
+        let root = &f.merged.root;
+        let node = root.resolve(&f.arena, &ptr(&["c", "p", "$value", "components", "1"])).unwrap();
+        assert!(matches!(&f.arena.get(node).value, DtcgValueSyntax::Number(n) if n.as_u64() == Some(8)));
+
+        // Group props resolve too, and the first layer's array is unreachable (index 2 only existed there).
+        let ty = root.resolve(&f.arena, &ptr(&["c", "$type"])).unwrap();
+        assert!(matches!(&f.arena.get(ty).value, DtcgValueSyntax::String(s) if s == "color"));
+        assert!(root.resolve(&f.arena, &ptr(&["c", "p", "$value", "components", "2"])).is_none());
+    }
+
+    #[test]
+    fn resolve_handles_edges() {
+        let mut f = Fixture::new();
+        f.layer(r#"{"g": {"t": {"$value": [1, 2]}}}"#);
+        let root = &f.merged.root;
+
+        // The token object itself, but not a group or the root.
+        assert!(root.resolve(&f.arena, &ptr(&["g", "t"])).is_some());
+        assert!(root.resolve(&f.arena, &ptr(&["g"])).is_none());
+        assert!(root.resolve(&f.arena, &ptr(&[])).is_none());
+        // Missing keys, non-indexes, leading zeros, and walking into a primitive.
+        for bad in [["g", "x"].as_slice(), &["g", "t", "$value", "-"], &["g", "t", "$value", "01"],
+            &["g", "t", "$value", "+1"], &["g", "t", "$value", "5"], &["g", "t", "$value", "0", "z"]] {
+            assert!(root.resolve(&f.arena, &ptr(bad)).is_none(), "path: {bad:?}");
+        }
+    }
+
+    #[test]
+    fn resolve_uses_escaped_keys_and_the_last_duplicate() {
+        let mut f = Fixture::new();
+        f.layer(r#"{"a/b": {"$value": {"k": 1, "k": 2}}}"#);
+        let p = JsonPointer::parse_pointer("/a~1b/$value/k").unwrap();
+        let node = f.merged.root.resolve(&f.arena, &p).unwrap();
+        assert!(matches!(&f.arena.get(node).value, DtcgValueSyntax::Number(n) if n.as_u64() == Some(2)));
     }
 }
