@@ -240,7 +240,7 @@ impl FromProp for Color {
         });
 
         let components = match a.member(prop, "components") {
-            Some(slot) => (a, slot, space, diags),
+            Some(slot) => components_slot(a, slot, space, diags),
             None => {
                 report_missing(a, prop, "components", diags);
                 None
