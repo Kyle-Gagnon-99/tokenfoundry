@@ -7,7 +7,7 @@ use crate::source::SourceId;
 /// A `Span` represents a range of characters within a source file, defined by a start and end position.
 pub type Span = Range<usize>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct SourceSpan {
     pub source_id: SourceId,
     pub span: Span,
@@ -51,15 +51,4 @@ impl<T> Spanned<T> {
     pub fn new(value: T, span: SourceSpan) -> Self {
         Self { value, span }
     }
-}
-
-pub struct Property<T> {
-    /// The key of the property, represented as a `Spanned<String>`.
-    /// This allows us to track the source span of the key in the original source file.
-    pub key: Spanned<String>,
-    /// The value of the property, represented as a `Spanned<T>`.
-    /// This allows us to track the source span of the value in the original source file.
-    pub value: Spanned<T>,
-    /// The source span of the entire property, which includes both the key and the value.
-    pub span: SourceSpan,
 }

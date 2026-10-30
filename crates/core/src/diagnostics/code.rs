@@ -23,6 +23,10 @@ pub enum DiagnosticCode {
     InvalidReferenceTarget = 2004,
     // 3xxx: Token value validation errors
     UnresolvedType = 3001,
+    UnexpectedShape = 3002,
+    InvalidTokenValue = 3003,
+    UnknownTokenType = 3004,
+    // 3050: Dimension errors
     // 4xxx: Extends / merging errors
     InvalidMergeRoot = 4001,
     GroupTokenConflict = 4002,
@@ -30,6 +34,13 @@ pub enum DiagnosticCode {
     ExtendsCycle = 4004,
     InvalidExtendsTarget = 4005,
     // 5xxx: Resolver errors
+    InvalidResolverShape = 5001,
+    DuplicateResolverName = 5002,
+    InvalidResolverReference = 5003,
+    ResolverReferenceCycle = 5004,
+    InvalidModifier = 5005,
+    InvalidResolverInput = 5006,
+    UnsupportedResolverReference = 5007,
     // 6xxx: Output errors
     // 7xxx: Configuration / CLI errors
     // 8xxx: General errors
@@ -206,6 +217,18 @@ impl DiagnosticCode {
                 title: "Invalid Reference Target",
                 doc_slug: "invalid-reference-target",
             },
+            Self::UnknownTokenType => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Unknown Token Type",
+                doc_slug: "unknown-token-type",
+            },
+            Self::InvalidTokenValue => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Invalid Token Value",
+                doc_slug: "invalid-token-value",
+            },
             Self::UnresolvedType => DiagnosticCodeInfo {
                 default_severity,
                 category: self.category(),
@@ -235,6 +258,48 @@ impl DiagnosticCode {
                 category: self.category(),
                 title: "Internal Error",
                 doc_slug: "internal-error",
+            },
+            Self::InvalidResolverShape => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Invalid Resolver Shape",
+                doc_slug: "invalid-resolver-shape",
+            },
+            Self::DuplicateResolverName => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Duplicate Resolver Name",
+                doc_slug: "duplicate-resolver-name",
+            },
+            Self::InvalidResolverReference => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Invalid Resolver Reference",
+                doc_slug: "invalid-resolver-reference",
+            },
+            Self::ResolverReferenceCycle => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Resolver Reference Cycle",
+                doc_slug: "resolver-reference-cycle",
+            },
+            Self::InvalidModifier => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Invalid Modifier",
+                doc_slug: "invalid-modifier",
+            },
+            Self::InvalidResolverInput => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Invalid Resolver Input",
+                doc_slug: "invalid-resolver-input",
+            },
+            Self::UnsupportedResolverReference => DiagnosticCodeInfo {
+                default_severity,
+                category: self.category(),
+                title: "Unsupported Resolver Reference",
+                doc_slug: "unsupported-resolver-reference",
             },
             Self::FileNotFound => DiagnosticCodeInfo {
                 default_severity,

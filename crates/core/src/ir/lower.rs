@@ -27,9 +27,9 @@ use crate::{
     },
 };
 
-/// Identifies one property in the lowered tree. It is an index into [`Lowered`].
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct PropId(pub u32);
+/// Identifies one property in the lowered tree. It is an index into [`Lowered`], and is defined in `ast` so the AST
+/// does not depend on `ir`.
+pub use crate::ast::node::PropId;
 
 #[derive(Debug, Clone)]
 pub struct Prop {
@@ -115,7 +115,12 @@ impl Lowered {
         self.props.is_empty()
     }
 
-    pub(crate) fn alloc(&mut self, origin: NodeId, parent: Option<PropId>, inherited_from: Option<PropId>) -> PropId {
+    pub(crate) fn alloc(
+        &mut self,
+        origin: NodeId,
+        parent: Option<PropId>,
+        inherited_from: Option<PropId>,
+    ) -> PropId {
         let id = PropId(self.props.len() as u32);
         self.props.push(Prop {
             kind: PropKind::Value(ValueData::Invalid),
@@ -144,7 +149,11 @@ impl Lowered {
                 ("$deprecated", c.deprecated),
                 ("$extensions", c.extensions),
             ];
-            out.extend(named.into_iter().filter_map(|(k, v)| Some((k.to_string(), v?))));
+            out.extend(
+                named
+                    .into_iter()
+                    .filter_map(|(k, v)| Some((k.to_string(), v?))),
+            );
         }
 
         let mut out = Vec::new();
@@ -175,7 +184,10 @@ impl Lowered {
 
     /// The props directly contained by `id`, in order. This is the containment relation the graph passes need.
     pub fn children(&self, id: PropId) -> Vec<PropId> {
-        self.keyed_children(id).into_iter().map(|(_, v)| v).collect()
+        self.keyed_children(id)
+            .into_iter()
+            .map(|(_, v)| v)
+            .collect()
     }
 
     /// The child of `id` with the given pointer key, or `None`.
@@ -199,10 +211,12 @@ impl Lowered {
     /// Resolves a token path (the segments of an alias such as `{color.brand.$root}`). Only group members are
     /// followed, so a `$`-property can never be reached except the `$root` token.
     pub fn member_path(&self, segments: &[String]) -> Option<PropId> {
-        segments.iter().try_fold(self.root, |id, name| match &self.get(id).kind {
-            PropKind::Group(g) => g.members.get(name).copied(),
-            _ => None,
-        })
+        segments
+            .iter()
+            .try_fold(self.root, |id, name| match &self.get(id).kind {
+                PropKind::Group(g) => g.members.get(name).copied(),
+                _ => None,
+            })
     }
 
     /// The JSON pointer fragment of a prop, e.g. `#/colors/blue/$value`, for use in diagnostics.
@@ -360,7 +374,10 @@ impl Lowerer<'_> {
                 self.diags.emit(
                     Diagnostic::new(DiagnosticCode::InvalidPropertyShape)
                         .with_message("`$ref` must be a string")
-                        .primary(raw.span.clone(), "expected a JSON pointer string such as \"#/colors/blue\""),
+                        .primary(
+                            raw.span.clone(),
+                            "expected a JSON pointer string such as \"#/colors/blue\"",
+                        ),
                 );
                 return TokenBody::Invalid;
             }
@@ -455,7 +472,9 @@ impl Lowerer<'_> {
             Diagnostic::new(DiagnosticCode::InvalidNodeShape)
                 .with_message(format!("`{name}` must be a group or a token"))
                 .primary(raw.span.clone(), "expected an object")
-                .help("a token is an object with `$value` or `$ref`, and a group is any other object"),
+                .help(
+                    "a token is an object with `$value` or `$ref`, and a group is any other object",
+                ),
         );
     }
 
@@ -472,7 +491,10 @@ impl Lowerer<'_> {
                 let mut map = IndexMap::new();
                 for (i, member) in members.iter().enumerate() {
                     // Only the last duplicate key survives, so earlier ones get no prop.
-                    if members[i + 1..].iter().any(|m| m.key.value == member.key.value) {
+                    if members[i + 1..]
+                        .iter()
+                        .any(|m| m.key.value == member.key.value)
+                    {
                         continue;
                     }
                     map.insert(member.key.value.clone(), self.value(member.value, id));
@@ -519,8 +541,12 @@ mod tests {
             assert!(errors.is_empty(), "syntax errors: {errors:?}");
             let source = self.ids.generate();
             let root = build(&mut self.arena, source, &tree.unwrap(), None);
-            self.merged
-                .layer(&self.arena, root, LayerOrigin::File(source), &mut self.diags);
+            self.merged.layer(
+                &self.arena,
+                root,
+                LayerOrigin::File(source),
+                &mut self.diags,
+            );
             self
         }
 
@@ -542,14 +568,26 @@ mod tests {
     }
 
     fn token<'a>(l: &'a Lowered, path: &[&str]) -> &'a TokenData {
-        match &l.get(l.member(path).unwrap_or_else(|| panic!("no member {path:?}"))).kind {
+        match &l
+            .get(
+                l.member(path)
+                    .unwrap_or_else(|| panic!("no member {path:?}")),
+            )
+            .kind
+        {
             PropKind::Token(t) => t,
             other => panic!("expected token at {path:?}, got {other:?}"),
         }
     }
 
     fn group<'a>(l: &'a Lowered, path: &[&str]) -> &'a GroupData {
-        match &l.get(l.member(path).unwrap_or_else(|| panic!("no member {path:?}"))).kind {
+        match &l
+            .get(
+                l.member(path)
+                    .unwrap_or_else(|| panic!("no member {path:?}")),
+            )
+            .kind
+        {
             PropKind::Group(g) => g,
             other => panic!("expected group at {path:?}, got {other:?}"),
         }
@@ -568,8 +606,14 @@ mod tests {
 
         assert!(matches!(&l.get(l.root).kind, PropKind::Group(_)));
         assert_eq!(group(&l, &[]).members.keys().collect::<Vec<_>>(), ["color"]);
-        assert_eq!(group(&l, &["color"]).members.keys().collect::<Vec<_>>(), ["red", "dark"]);
-        assert!(matches!(token(&l, &["color", "red"]).body, TokenBody::Value(_)));
+        assert_eq!(
+            group(&l, &["color"]).members.keys().collect::<Vec<_>>(),
+            ["red", "dark"]
+        );
+        assert!(matches!(
+            token(&l, &["color", "red"]).body,
+            TokenBody::Value(_)
+        ));
         group(&l, &["color", "dark"]);
         token(&l, &["color", "dark", "x"]);
         assert!(f.diags.diagnostics().is_empty());
@@ -599,23 +643,38 @@ mod tests {
     #[test]
     fn token_value_is_lowered_as_plain_json() {
         let (_, l) = one(r#"{"t": {"$value": {"a": [1, 2]}}}"#);
-        let TokenBody::Value(v) = token(&l, &["t"]).body else { panic!() };
+        let TokenBody::Value(v) = token(&l, &["t"]).body else {
+            panic!()
+        };
 
-        let PropKind::Value(ValueData::Object(map)) = &l.get(v).kind else { panic!() };
-        let PropKind::Value(ValueData::Array(items)) = &l.get(map["a"]).kind else { panic!() };
+        let PropKind::Value(ValueData::Object(map)) = &l.get(v).kind else {
+            panic!()
+        };
+        let PropKind::Value(ValueData::Array(items)) = &l.get(map["a"]).kind else {
+            panic!()
+        };
         assert_eq!(items.len(), 2);
-        assert!(matches!(&l.get(items[0]).kind, PropKind::Value(ValueData::Scalar)));
+        assert!(matches!(
+            &l.get(items[0]).kind,
+            PropKind::Value(ValueData::Scalar)
+        ));
     }
 
     #[test]
     fn duplicate_keys_inside_a_value_keep_the_last() {
         let (f, l) = one(r#"{"t": {"$value": {"k": 1, "k": 2}}}"#);
-        let TokenBody::Value(v) = token(&l, &["t"]).body else { panic!() };
-        let PropKind::Value(ValueData::Object(map)) = &l.get(v).kind else { panic!() };
+        let TokenBody::Value(v) = token(&l, &["t"]).body else {
+            panic!()
+        };
+        let PropKind::Value(ValueData::Object(map)) = &l.get(v).kind else {
+            panic!()
+        };
 
         assert_eq!(map.len(), 1);
         let origin = l.get(map["k"]).origin;
-        assert!(matches!(&f.arena.get(origin).value, DtcgValueSyntax::Number(n) if n.as_u64() == Some(2)));
+        assert!(
+            matches!(&f.arena.get(origin).value, DtcgValueSyntax::Number(n) if n.as_u64() == Some(2))
+        );
         // root, t, $value, k
         assert_eq!(l.len(), 4);
     }
@@ -624,7 +683,9 @@ mod tests {
     fn ref_token_is_parsed() {
         let (f, l) = one(r##"{"a": {"$ref": "#/b/$value"}, "b": {"$value": 1}}"##);
 
-        let TokenBody::Ref { prop, reference } = &token(&l, &["a"]).body else { panic!() };
+        let TokenBody::Ref { prop, reference } = &token(&l, &["a"]).body else {
+            panic!()
+        };
         assert!(reference.document().is_none());
         assert_eq!(reference.fragment().segments(), ["b", "$value"]);
         assert_eq!(string_of(&f, &l, *prop), "#/b/$value");
@@ -634,7 +695,9 @@ mod tests {
     #[test]
     fn ref_to_another_file_is_parsed() {
         let (_, l) = one(r##"{"a": {"$ref": "colors.json#/blue"}}"##);
-        let TokenBody::Ref { reference, .. } = &token(&l, &["a"]).body else { panic!() };
+        let TokenBody::Ref { reference, .. } = &token(&l, &["a"]).body else {
+            panic!()
+        };
         assert_eq!(reference.document().unwrap().path(), Some("colors.json"));
     }
 
@@ -659,7 +722,13 @@ mod tests {
         let (f, l) = one(r#"{"a": {"$ref": "C:\\tokens\\colors.json#/x"}}"#);
 
         assert_eq!(f.codes(), [DiagnosticCode::InvalidReference]);
-        assert!(f.diags.diagnostics()[0].help.as_deref().unwrap().contains("relative"));
+        assert!(
+            f.diags.diagnostics()[0]
+                .help
+                .as_deref()
+                .unwrap()
+                .contains("relative")
+        );
         assert!(matches!(token(&l, &["a"]).body, TokenBody::Invalid));
 
         let (f, _) = one(r#"{"a": {"$ref": "https://example.com/a.json#/x"}}"#);
@@ -702,7 +771,9 @@ mod tests {
 
     #[test]
     fn extends_accepts_a_string_or_an_object() {
-        let (f, l) = one(r##"{"a": {"$extends": "{b}"}, "c": {"$extends": {"$ref": "#/b"}}, "d": {"$extends": 1}}"##);
+        let (f, l) = one(
+            r##"{"a": {"$extends": "{b}"}, "c": {"$extends": {"$ref": "#/b"}}, "d": {"$extends": 1}}"##,
+        );
 
         assert!(group(&l, &["a"]).extends.is_some());
         assert!(group(&l, &["c"]).extends.is_some());
@@ -715,13 +786,18 @@ mod tests {
         let (f, l) = one(r#"{"g": {"$root": {"$value": 1}, "x": {"$value": 2}}}"#);
 
         token(&l, &["g", "$root"]);
-        assert_eq!(group(&l, &["g"]).members.keys().collect::<Vec<_>>(), ["$root", "x"]);
+        assert_eq!(
+            group(&l, &["g"]).members.keys().collect::<Vec<_>>(),
+            ["$root", "x"]
+        );
         assert!(f.diags.diagnostics().is_empty());
     }
 
     #[test]
     fn invalid_names_are_reported_but_still_lowered() {
-        let (f, l) = one(r#"{"a.b": {"$value": 1}, "{x}": {"$value": 1}, "c}": {"y": {"$value": 1}}, "ok": {"$value": 1}}"#);
+        let (f, l) = one(
+            r#"{"a.b": {"$value": 1}, "{x}": {"$value": 1}, "c}": {"y": {"$value": 1}}, "ok": {"$value": 1}}"#,
+        );
 
         assert_eq!(f.codes(), [DiagnosticCode::InvalidName; 3]);
         assert_eq!(group(&l, &[]).members.len(), 4);
@@ -749,10 +825,17 @@ mod tests {
         assert!(g.common.type_.is_some() && g.common.description.is_some());
         assert_eq!(g.members.len(), 2);
         // The group's origin is the latest contributing object.
-        assert_eq!(l.get(l.member(&["g"]).unwrap()).origin, *f.merged.root.get(&crate::ast::reference::JsonPointer::from_segments(["g"])).map(|n| match n {
-            MergedNode::Group(g) => g.origins.last().unwrap(),
-            _ => panic!(),
-        }).unwrap());
+        assert_eq!(
+            l.get(l.member(&["g"]).unwrap()).origin,
+            *f.merged
+                .root
+                .get(&crate::ast::reference::JsonPointer::from_segments(["g"]))
+                .map(|n| match n {
+                    MergedNode::Group(g) => g.origins.last().unwrap(),
+                    _ => panic!(),
+                })
+                .unwrap()
+        );
     }
 
     #[test]

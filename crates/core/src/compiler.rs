@@ -1,13 +1,15 @@
 //! The `compiler` module provides the core functionality for compiling DTCG into various outputs. This module contains the main entry point
 //! for the core library.
 
-use std::path::Path;
-
-use crate::{config::Config, diagnostics::diagnostic::DiagnosticStore, source::SourceMap};
+use crate::{
+    ast::resolve::ResolvedTokens,
+    diagnostics::diagnostic::DiagnosticStore,
+    resolver::{Bundle, Input, SourceProvider},
+    source::SourceMap,
+};
 
 #[derive(Debug)]
 pub struct CompileSession<'a> {
-    pub config: &'a Config,
     pub sources: &'a mut SourceMap,
     pub diagnostics: &'a mut DiagnosticStore,
 }
@@ -30,32 +32,63 @@ impl DtcgCompiler {
         }
     }
 
-    /// Compiles the DTCG into various outputs based on the provided configuration and resolver.
+    /// Compiles a resolver for one input into fully resolved tokens. Nothing here touches the filesystem: the
+    /// caller gives the resolver's text and a provider for the files it references.
     ///
     /// # Arguments
     ///
-    /// * `config`: The configuration options for the compilation process, which may include settings for log level, Tailwind CSS transformation, and other options.
-    /// * `resolver`: A path to a resolver that will be used to locate and process the DTCG files during the compilation process.
+    /// * `config`: The configuration options for the compilation process.
+    /// * `resolver_path`: The resolver's path. Relative file references are joined to its directory, and it is used as the label in diagnostics.
+    /// * `resolver_text`: The contents of the resolver document.
+    /// * `provider`: Supplies the contents of every file the resolver references.
+    /// * `input`: The context to use for each modifier. Modifiers with a default may be left out.
     ///
     /// # Returns
     ///
-    /// `Result<(), CompileFailed>` indicating the success or failure of the compilation process. If the compilation is successful, it returns `Ok(())`. If there is an error during the compilation, it returns `Err(CompileFailed)`.
-    /// Use `get_diagnostics()` to retrieve the diagnostics for the compilation process, including errors.
-    pub fn compile<P: AsRef<Path>>(
+    /// The resolved tokens, or `CompileFailed` if any error was reported. Use [`DtcgCompiler::diagnostics`] to see
+    /// everything that was reported, including warnings on success.
+    pub fn compile(
         &mut self,
-        config: Config,
-        resolver: P,
-    ) -> Result<(), CompileFailed> {
-        // Start a new compile session with the provided configuration, sources, and diagnostics
+        resolver_path: &str,
+        resolver_text: &str,
+        provider: &dyn SourceProvider,
+        input: &Input,
+    ) -> Result<ResolvedTokens, CompileFailed> {
         self.sources.clear();
         self.diagnostics.clear();
 
-        let mut session = CompileSession {
-            config: &config,
+        let session = CompileSession {
             sources: &mut self.sources,
             diagnostics: &mut self.diagnostics,
         };
 
-        Ok(())
+        let result = Bundle::load(
+            resolver_path,
+            resolver_text,
+            provider,
+            session.sources,
+            session.diagnostics,
+        )
+        .and_then(|bundle| bundle.compile(input, session.diagnostics))
+        .map(|compiled| compiled.resolved());
+
+        match result {
+            Some(tokens) if !self.diagnostics.has_errors() => Ok(tokens),
+            _ => Err(CompileFailed),
+        }
+    }
+
+    pub fn diagnostics(&self) -> &DiagnosticStore {
+        &self.diagnostics
+    }
+
+    pub fn sources(&self) -> &SourceMap {
+        &self.sources
+    }
+}
+
+impl Default for DtcgCompiler {
+    fn default() -> Self {
+        Self::new()
     }
 }

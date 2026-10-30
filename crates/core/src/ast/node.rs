@@ -3,8 +3,14 @@
 //! Typically tokens and groups share the same metadata types (such as description, type, and so on), so this module consolidates the definitions of these
 //! shared types.
 
-use crate::{ir::lower::PropId, source::SourceSpan};
+use crate::source::SourceSpan;
 
+/// Identifies one property in the lowered tree. It is an index into the `ir`'s lowered tree, and lives here so the
+/// AST can point at nodes without depending on `ir`.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub struct PropId(pub u32);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Node<T> {
     pub value: T,
     pub id: PropId,

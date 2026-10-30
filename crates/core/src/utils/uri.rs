@@ -10,12 +10,6 @@ use regex::Regex;
 pub struct UriScheme(String);
 
 impl UriScheme {
-    /// Creates a new `UriScheme` from a string representation of the scheme.
-    /// If the scheme is "file", it returns `UriScheme::File`. Otherwise, it returns `UriScheme::Other` with the provided scheme string.
-    pub fn new(scheme: &str) -> Self {
-        UriScheme(scheme.to_string())
-    }
-
     /// Checks if the given scheme string is a valid URI scheme according to RFC 3986.
     pub fn is_valid_scheme(scheme: &str) -> bool {
         let mut chars = scheme.chars();
@@ -74,22 +68,6 @@ pub struct Uri {
 }
 
 impl Uri {
-    pub fn new(
-        scheme: Option<String>,
-        authority: Option<String>,
-        path: String,
-        query: Option<String>,
-        fragment: Option<String>,
-    ) -> Self {
-        Self {
-            scheme,
-            authority,
-            path,
-            query,
-            fragment,
-        }
-    }
-
     pub fn decoded_path(&self) -> Result<String, UriParseError> {
         Self::decode_path(&self.path)
     }

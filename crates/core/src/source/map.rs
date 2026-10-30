@@ -6,16 +6,13 @@ use std::{
     sync::Arc,
 };
 
-use crate::{
-    diagnostics::{
-        code::DiagnosticCode,
-        diagnostic::{Diagnostic, DiagnosticSink},
-    },
-    ir::node::NodeId,
+use crate::diagnostics::{
+    code::DiagnosticCode,
+    diagnostic::{Diagnostic, DiagnosticSink},
 };
 
 /// Identifies a source file by a unique numeric ID, which can be used to reference the source file in diagnostics and other parts of the system.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct SourceId(u32);
 
 impl SourceId {
@@ -45,21 +42,7 @@ impl SourceIdGenerator {
 
 #[derive(Debug, Clone)]
 pub struct SourceFile {
-    pub id: SourceId,
-    pub path: PathBuf,
     pub content: Arc<str>,
-    pub root_node_id: NodeId,
-}
-
-impl SourceFile {
-    /// Set the root node ID for the source file.
-    ///
-    /// # Parameters
-    ///
-    /// - `root_node_id`: The `NodeId` to set as the root node ID for the source file.
-    pub fn set_root_node_id(&mut self, root_node_id: NodeId) {
-        self.root_node_id = root_node_id;
-    }
 }
 
 /// Contains the mapping information between the source file and the generated ID.
@@ -140,6 +123,22 @@ impl SourceMap {
             }
         };
 
+        Ok(self.register_source(path_ref, content))
+    }
+
+    /// Registers a source whose content the caller already has, such as from a browser, a Node host or a test, so
+    /// nothing is read from disk. `path` is only a label for diagnostics and for finding the source again. If it is
+    /// already registered, the existing `SourceId` is returned and the existing content is kept.
+    pub fn register_source<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        content: impl Into<Arc<str>>,
+    ) -> SourceId {
+        let path_ref = path.as_ref();
+        if let Some(&id) = self.path_to_id.get(path_ref) {
+            return id;
+        }
+
         // Generate a new SourceId for the source file and update the mappings
         let new_id = self.generator.generate();
         self.path_to_id.insert(path_ref.to_path_buf(), new_id);
@@ -149,14 +148,11 @@ impl SourceMap {
         // Set the root node ID for the source file to u32::MAX as a placeholder. 0 is valid, so
         // we use u32::MAX to indicate an uninitialized root node ID.
         let source_file = SourceFile {
-            id: new_id,
-            path: path_ref.to_path_buf(),
-            content: Arc::from(content),
-            root_node_id: NodeId(u32::MAX),
+            content: content.into(),
         };
         self.files.insert(new_id, source_file);
 
-        Ok(new_id)
+        new_id
     }
 
     pub fn get_path(&self, id: SourceId) -> Option<&Path> {
@@ -174,5 +170,62 @@ impl SourceMap {
     /// Retrieves the content of a source file by its `SourceId`. If the `SourceId` is valid and corresponds to a registered source file, it returns the content as an `Arc<str>`. If the `SourceId` is invalid or not found, it returns `None`.
     pub fn get_content(&self, id: SourceId) -> Option<Arc<str>> {
         self.files.get(&id).map(|file| file.content.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostics::diagnostic::DiagnosticStore;
+
+    #[test]
+    fn in_memory_sources_never_touch_the_disk() {
+        let mut map = SourceMap::new();
+        let id = map.register_source("virtual/tokens.json", r#"{"a": 1}"#);
+        assert_eq!(&*map.get_content(id).unwrap(), r#"{"a": 1}"#);
+        assert_eq!(map.get_path(id), Some(Path::new("virtual/tokens.json")));
+    }
+
+    #[test]
+    fn registering_the_same_path_twice_keeps_the_first_content() {
+        let mut map = SourceMap::new();
+        let first = map.register_source("a.json", "{}");
+        let second = map.register_source("a.json", "[]");
+        assert_eq!(first, second);
+        assert_eq!(&*map.get_content(first).unwrap(), "{}");
+    }
+
+    #[test]
+    fn distinct_paths_get_distinct_ids() {
+        let mut map = SourceMap::new();
+        assert_ne!(
+            map.register_source("a.json", "{}"),
+            map.register_source("b.json", "{}")
+        );
+    }
+
+    #[test]
+    fn a_file_on_disk_is_read_through_the_same_path() {
+        let path = std::env::temp_dir().join("tokenfoundry_register_test.json");
+        std::fs::write(&path, "{\"x\": 2}").unwrap();
+        let mut map = SourceMap::new();
+        let mut diags = DiagnosticStore::new();
+        let id = map.register(&path, &mut diags).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(&*map.get_content(id).unwrap(), "{\"x\": 2}");
+        // A second registration returns the cached id.
+        assert_eq!(map.register(&path, &mut diags), Ok(id));
+        assert!(diags.diagnostics().is_empty());
+    }
+
+    #[test]
+    fn a_missing_file_is_a_diagnostic() {
+        let mut map = SourceMap::new();
+        let mut diags = DiagnosticStore::new();
+        assert!(
+            map.register("/no/such/tokenfoundry.json", &mut diags)
+                .is_err()
+        );
+        assert_eq!(diags.diagnostics().len(), 1);
     }
 }

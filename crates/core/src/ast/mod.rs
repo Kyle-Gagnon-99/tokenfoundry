@@ -7,6 +7,7 @@
 
 pub(crate) mod node;
 pub(crate) mod reference;
+pub mod resolve;
 pub mod token;
 pub mod types;
 pub mod value;

@@ -10,6 +10,7 @@
 //! reporting as many independent problems as possible in one run is better for the user, and the later stages
 //! simply skip what could not be resolved.
 
+use indexmap::IndexMap;
 use json_spanned::parser::{JsonValue, Spanned};
 
 use crate::{
@@ -17,12 +18,13 @@ use crate::{
     ir::{
         arena::{self, Arena},
         extends::expand_extends,
-        lower::{Lowered, lower},
+        lower::{Lowered, PropId, PropKind, ValueData, lower},
         merge::{LayerOrigin, Merged},
+        node::DtcgValueSyntax,
         refs::{References, resolve_references},
         types::{TypeMap, resolve_types},
     },
-    source::SourceId,
+    source::{SourceId, SourceSpan},
 };
 
 /// One parsed document, in the order it should be layered: later layers win.
@@ -40,6 +42,60 @@ pub struct Analyzed {
     pub lowered: Lowered,
     pub references: References,
     pub types: TypeMap,
+}
+
+/// Read helpers for the passes that build the final AST. Each takes a [`PropId`] and answers one question about it,
+/// so a parser never has to touch the arena, the lowered tree and the reference table separately.
+impl Analyzed {
+    /// The raw syntax of the JSON value behind `prop`.
+    pub fn syntax(&self, prop: PropId) -> &DtcgValueSyntax {
+        &self.arena.get(self.lowered.get(prop).origin).value
+    }
+
+    /// Where the author wrote `prop`.
+    pub fn span(&self, prop: PropId) -> SourceSpan {
+        self.arena.get(self.lowered.get(prop).origin).span.clone()
+    }
+
+    /// The members of `prop` if it is a JSON object, and `None` for any other shape.
+    pub fn members(&self, prop: PropId) -> Option<&IndexMap<String, PropId>> {
+        match &self.lowered.get(prop).kind {
+            PropKind::Value(ValueData::Object(members)) => Some(members),
+            _ => None,
+        }
+    }
+
+    /// The items of `prop` if it is a JSON array, and `None` for any other shape.
+    pub fn items(&self, prop: PropId) -> Option<&[PropId]> {
+        match &self.lowered.get(prop).kind {
+            PropKind::Value(ValueData::Array(items)) => Some(items),
+            _ => None,
+        }
+    }
+
+    /// The member named `key` of the object `prop`.
+    pub fn member(&self, prop: PropId, key: &str) -> Option<PropId> {
+        self.members(prop)?.get(key).copied()
+    }
+
+    pub fn string(&self, prop: PropId) -> Option<&str> {
+        match self.syntax(prop) {
+            DtcgValueSyntax::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn number(&self, prop: PropId) -> Option<f64> {
+        match self.syntax(prop) {
+            DtcgValueSyntax::Number(n) => Some(n.as_f64()),
+            _ => None,
+        }
+    }
+
+    /// What `prop` points at, if it is a reference (an alias string or a `$ref` object) that resolved.
+    pub fn target(&self, prop: PropId) -> Option<PropId> {
+        self.references.target(prop)
+    }
 }
 
 /// Why the pipeline stopped before producing an [`Analyzed`]. The details are in the diagnostics.
@@ -84,6 +140,28 @@ pub fn analyze(layers: &[Layer<'_>], diags: &mut DiagnosticStore) -> Result<Anal
         references,
         types,
     })
+}
+
+/// The result of [`compile`]: the faithful token tree, plus the analysis its references point into. Keeping both
+/// is what lets [`Compiled::resolved`] read the literal at the end of a reference.
+#[derive(Debug)]
+pub struct Compiled {
+    pub arena: crate::ast::token::TokenArena,
+    pub analyzed: Analyzed,
+}
+
+impl Compiled {
+    /// Every token with its aliases and references followed to plain values, for targets without variables.
+    pub fn resolved(&self) -> crate::ast::resolve::ResolvedTokens {
+        crate::ast::resolve::resolve(&self.arena, &self.analyzed)
+    }
+}
+
+/// Runs every pass: analysis, then building the final token arena.
+pub fn compile(layers: &[Layer<'_>], diags: &mut DiagnosticStore) -> Result<Compiled, Blocked> {
+    let analyzed = analyze(layers, diags)?;
+    let arena = crate::ir::build::build_tokens(&analyzed, diags);
+    Ok(Compiled { arena, analyzed })
 }
 
 /// Whether a diagnostic with `code` was emitted after the first `since` ones.
@@ -161,7 +239,9 @@ mod tests {
 
     #[test]
     fn a_ref_token_resolves_and_records_target() {
-        let (result, diags) = run(&[r##"{"target": {"$type": "number", "$value": 42}, "pointer": {"$ref": "#/target"}}"##]);
+        let (result, diags) = run(&[
+            r##"{"target": {"$type": "number", "$value": 42}, "pointer": {"$ref": "#/target"}}"##,
+        ]);
 
         let analyzed = result.expect("should analyze without error");
         assert!(diags.diagnostics().is_empty());
@@ -169,7 +249,10 @@ mod tests {
 
         let pointer_token = analyzed.lowered.member(&["pointer"]).unwrap();
         let target_token = analyzed.lowered.member(&["target"]).unwrap();
-        assert_eq!(analyzed.references.target(pointer_token), Some(target_token));
+        assert_eq!(
+            analyzed.references.target(pointer_token),
+            Some(target_token)
+        );
     }
 
     #[test]
@@ -198,9 +281,7 @@ mod tests {
 
     #[test]
     fn a_ref_cycle_blocks() {
-        let (result, diags) = run(&[
-            r##"{"a": {"$ref": "#/b"}, "b": {"$ref": "#/a"}}"##,
-        ]);
+        let (result, diags) = run(&[r##"{"a": {"$ref": "#/b"}, "b": {"$ref": "#/a"}}"##]);
         assert_eq!(result.unwrap_err(), Blocked::ReferenceCycle);
         assert_eq!(diags.diagnostics()[0].code, DiagnosticCode::ReferenceCycle);
     }
@@ -208,9 +289,7 @@ mod tests {
     #[test]
     fn a_ref_to_ancestor_creates_cycle_and_blocks() {
         // Referencing an ancestor container is a cycle via containment edge
-        let (result, diags) = run(&[
-            r##"{"group": {"token": {"$ref": "#/group"}}}"##,
-        ]);
+        let (result, diags) = run(&[r##"{"group": {"token": {"$ref": "#/group"}}}"##]);
         assert_eq!(result.unwrap_err(), Blocked::ReferenceCycle);
         assert_eq!(diags.diagnostics()[0].code, DiagnosticCode::ReferenceCycle);
     }
@@ -269,5 +348,41 @@ mod tests {
         assert!(codes.contains(&DiagnosticCode::TokenValueAndRef));
         assert!(codes.contains(&DiagnosticCode::UnresolvedExtends));
         assert!(codes.contains(&DiagnosticCode::UnresolvedReference));
+    }
+
+    #[test]
+    fn read_helpers_answer_questions_about_a_value_prop() {
+        let (result, _) = run(&[
+            r##"{"a": {"$type": "number", "$value": 1}, "t": {"$type": "dimension",
+            "$value": {"value": "{a}", "unit": "px", "ref": {"$ref": "#/a"}, "list": [1, 2]}}}"##,
+        ]);
+        let a = result.unwrap();
+
+        let token = a.lowered.member(&["t"]).unwrap();
+        let crate::ir::lower::PropKind::Token(data) = &a.lowered.get(token).kind else {
+            panic!()
+        };
+        let crate::ir::lower::TokenBody::Value(v) = data.body else {
+            panic!()
+        };
+
+        assert_eq!(a.members(v).unwrap().len(), 4);
+        assert_eq!(a.string(a.member(v, "unit").unwrap()), Some("px"));
+        assert!(a.member(v, "missing").is_none());
+        assert_eq!(a.items(a.member(v, "list").unwrap()).unwrap().len(), 2);
+        assert_eq!(
+            a.number(a.items(a.member(v, "list").unwrap()).unwrap()[1]),
+            Some(2.0)
+        );
+        // Wrong shapes answer `None` instead of panicking.
+        assert!(a.members(a.member(v, "unit").unwrap()).is_none());
+        assert!(a.number(a.member(v, "unit").unwrap()).is_none());
+
+        let alias = a.member(v, "value").unwrap();
+        let ref_obj = a.member(v, "ref").unwrap();
+        let target = a.lowered.member(&["a"]).unwrap();
+        assert_eq!(a.target(alias), Some(target));
+        assert_eq!(a.target(ref_obj), Some(target));
+        assert_eq!(a.target(a.member(v, "unit").unwrap()), None);
     }
 }

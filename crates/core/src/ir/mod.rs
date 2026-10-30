@@ -4,6 +4,7 @@
 //! The IR serves as an intermediate layer between the raw JSON input and the final output formats, enabling more flexible and powerful transformations.
 
 pub mod arena;
+pub mod build;
 pub mod extends;
 pub mod lower;
 pub mod merge;
